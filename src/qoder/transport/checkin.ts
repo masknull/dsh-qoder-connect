@@ -10,6 +10,11 @@ import {
 import { isQoderAuthRejection, QoderLlmError } from '../errors.ts'
 import type { QoderLogger } from './logging.ts'
 import { openApiJsonRequest } from './request.ts'
+import {
+  qoderDesktopClientType,
+  qoderDesktopUserAgent,
+  qoderDesktopVersion,
+} from './wire/cosy.ts'
 
 export interface QoderCampaignBenefit {
   kind?: string
@@ -86,9 +91,16 @@ export class QoderCheckInService {
 
   async fetchCampaigns(token: string, signal?: AbortSignal): Promise<QoderCampaign[]> {
     const url = getQoderCampaignsUrl(this.region)
+    const { openApiUrl } = resolveQoderEndpoints(this.region)
     const data = await openApiJsonRequest<QoderCampaignsResponse>(this.fetchImpl, {
       url,
       token,
+      headers: {
+        'cosy-clienttype': qoderDesktopClientType,
+        'cosy-version': qoderDesktopVersion,
+        'user-agent': qoderDesktopUserAgent,
+        origin: openApiUrl,
+      },
       signal,
       timeoutMs: this.timeoutMs,
       logger: this.logger,
@@ -105,7 +117,12 @@ export class QoderCheckInService {
       url,
       method: 'POST',
       token,
-      headers: { origin: openApiUrl },
+      headers: {
+        'cosy-clienttype': qoderDesktopClientType,
+        'cosy-version': qoderDesktopVersion,
+        'user-agent': qoderDesktopUserAgent,
+        origin: openApiUrl,
+      },
       signal,
       timeoutMs: this.timeoutMs,
       logger: this.logger,

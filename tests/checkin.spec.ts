@@ -32,7 +32,12 @@ describe('QoderCheckInService', () => {
     const auth = createMockAuth('valid-token')
     const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = String(url)
+      const headers = (init?.headers ?? {}) as Record<string, string>
       if (urlStr.includes('/sash/api/v1/me/campaigns') && (!init?.method || init.method === 'GET')) {
+        expect(headers['cosy-clienttype']).toBe('10')
+        expect(headers['cosy-version']).toBe('0.3.4')
+        expect(headers['user-agent']).toBe('Qoder')
+        expect(headers['origin']).toBe('https://openapi.qoder.com.cn')
         return new Response(JSON.stringify({
           claimable: true,
           campaigns: [
@@ -47,6 +52,10 @@ describe('QoderCheckInService', () => {
         }), { status: 200, headers: { 'content-type': 'application/json' } })
       }
       if (urlStr.includes('/sash/api/v1/me/campaigns/camp-123/claim') && init?.method === 'POST') {
+        expect(headers['cosy-clienttype']).toBe('10')
+        expect(headers['cosy-version']).toBe('0.3.4')
+        expect(headers['user-agent']).toBe('Qoder')
+        expect(headers['origin']).toBe('https://openapi.qoder.com.cn')
         return new Response(JSON.stringify({
           status: 'CLAIMED',
           benefit: { amount: 100, kind: 'CREDITS' },

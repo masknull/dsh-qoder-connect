@@ -665,7 +665,7 @@ describe('fetchCredits: QoderAccountInfo -> QoderCredits', () => {
       total: 42,
       totalSize: 150,
       accounts: [
-        { packageName: '个人额度', remain: 70, size: 100, packageEndTime: '2026-10-01T00:00:00Z' },
+        { packageName: '套餐内 Credits', remain: 70, size: 100, packageEndTime: '2026-10-01T00:00:00Z' },
         { packageName: '组织资源包', remain: 40, size: 50, packageEndTime: '2026-10-01T00:00:00Z' },
       ],
       cycleResetTime: '2026-10-01T00:00:00Z',
@@ -680,7 +680,7 @@ describe('fetchCredits: QoderAccountInfo -> QoderCredits', () => {
     expect(credits).toEqual({
       total: 60,
       totalSize: 100,
-      accounts: [{ packageName: '个人额度', remain: 40, size: 100 }],
+      accounts: [{ packageName: '套餐内 Credits', remain: 40, size: 100 }],
     })
   })
 

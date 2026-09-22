@@ -20,6 +20,11 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 export const qoderIdeVersion = '1.1.47'
 export const qoderClientType = '5'
 export const defaultUserAgent = `qoder/${qoderIdeVersion}`
+
+/** Desktop client identification required by activity & campaign endpoints. */
+export const qoderDesktopClientType = '10'
+export const qoderDesktopVersion = '0.3.4'
+export const qoderDesktopUserAgent = 'Qoder'
 const qoderDataPolicy = 'disagree'
 const qoderLoginVersion = 'v2'
 const qoderMachineOs = process.platform === 'win32'

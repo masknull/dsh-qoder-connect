@@ -16,6 +16,7 @@ export interface QoderQuota {
 
 export interface QoderQuotaUsage {
   userQuota?: QoderQuota | undefined
+  addOnQuota?: QoderQuota | undefined
   orgResourcePackage?: QoderQuota | undefined
   totalUsagePercentage?: number | undefined
   isQuotaExceeded?: boolean | undefined

@@ -671,9 +671,18 @@ export class QoderUpstreamClient {
     const personal = usage.userQuota
     if (personal !== undefined) {
       accounts.push({
-        packageName: '个人额度',
+        packageName: '套餐内 Credits',
         remain: personal.remaining,
         size: personal.total,
+        ...usage.expiresAt === undefined ? {} : { packageEndTime: usage.expiresAt },
+      })
+    }
+    const addOn = usage.addOnQuota
+    if (addOn !== undefined) {
+      accounts.push({
+        packageName: '资源包',
+        remain: addOn.remaining,
+        size: addOn.total,
         ...usage.expiresAt === undefined ? {} : { packageEndTime: usage.expiresAt },
       })
     }
@@ -686,7 +695,11 @@ export class QoderUpstreamClient {
         ...usage.expiresAt === undefined ? {} : { packageEndTime: usage.expiresAt },
       })
     }
-    const unlimited = usage.isQuotaExceeded === false && personal !== undefined && personal.total === 0
+    const unlimited = usage.isQuotaExceeded === false
+      && personal !== undefined
+      && personal.total === 0
+      && (addOn === undefined || addOn.total === 0)
+      && (org === undefined || org.total === 0)
     return {
       total: usage.totalUsagePercentage ?? personal?.percentage ?? 0,
       totalSize: accounts.reduce((sum, entry) => sum + entry.size, 0),

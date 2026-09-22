@@ -320,9 +320,10 @@ describe('Qoder plugin card', () => {
     await mount()
     await press(en.tabDetails)
     let tree = JSON.stringify(view!.toJSON())
-    // The exhausted package is dropped; the unknown-size one renders unlimited copy.
-    expect(tree).toContain(t('exactRemaining', { remain: '75', size: '100' }))
-    expect(tree).not.toContain('组织资源包')
+    // All packages render; the unknown-size one renders unlimited copy.
+    expect(tree).toContain('25 / 100')
+    expect(tree).toContain(t('quotaRemainStats', { remain: '75' }))
+    expect(tree).toContain('组织资源包')
     expect(tree).toContain(en.unlimitedQuota)
     await press(en.tabContext)
     tree = JSON.stringify(view!.toJSON())

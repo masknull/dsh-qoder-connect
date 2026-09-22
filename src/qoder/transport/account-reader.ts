@@ -51,6 +51,7 @@ interface RawQuota {
 
 interface RawUsageInfo {
   userQuota?: RawQuota
+  addOnQuota?: RawQuota
   orgResourcePackage?: RawQuota
   totalUsagePercentage?: number
   isQuotaExceeded?: boolean
@@ -311,6 +312,7 @@ export class QoderUsageReader {
 
     return {
       userQuota: normalizeQuota(data.userQuota),
+      addOnQuota: normalizeQuota(data.addOnQuota),
       orgResourcePackage: normalizeQuota(data.orgResourcePackage),
       totalUsagePercentage: typeof data.totalUsagePercentage === 'number' ? data.totalUsagePercentage : undefined,
       isQuotaExceeded: typeof data.isQuotaExceeded === 'boolean' ? data.isQuotaExceeded : false,

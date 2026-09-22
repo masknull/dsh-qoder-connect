@@ -251,7 +251,14 @@ const contextPickerRowStyle: CSSProperties = {
   gap: 8,
   flexWrap: 'wrap',
 }
-const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
+const progressTrackStyle: CSSProperties = {
+  height: 10,
+  overflow: 'hidden',
+  borderRadius: 999,
+  background: 'var(--dsw-alias-bg-layer-3, rgba(128, 128, 128, 0.12))',
+  border: '1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.2))',
+  boxSizing: 'border-box',
+}
 
 /**
  * The PAT entry row: the password field takes the row's flexible width, the
@@ -422,64 +429,68 @@ function CreditBar({ label, remain, size, unlimited, packageEndTime, t }: {
   packageEndTime?: string | undefined
   t: QoderPluginCardInjected['t']
 }): React.ReactNode {
-  const expiry = packageEndTime === undefined
+  const expiryNode = packageEndTime === undefined
     ? null
-    : <p style={modelRateStyle}>{t('quotaExpires')} {formatCycleReset(packageEndTime)}</p>
+    : <span style={modelRateStyle}>{t('quotaExpires')} {formatCycleReset(packageEndTime)}</span>
   if (unlimited === true) {
     const quotaText = t('unlimitedQuota')
     return (
       <div style={quotaGroupStyle}>
         <div style={quotaLabelStyle}>
-          <span>{label}</span>
-          <span>{quotaText}</span>
+          <span style={{ fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>{label}</span>
+          <span style={{ ...bodyStyle, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' }}>
+            {t('quotaRemainStats', { remain: '∞' })}
+          </span>
         </div>
         <div
           style={progressTrackStyle}
           role="progressbar"
           aria-label={label}
-          /*
-           * "Uncapped" is not "100% remaining", so the range attributes are
-           * omitted and no fill is drawn: an uncapped quota has no proportion
-           * to state, and a full bar would assert one.
-           */
           aria-valuetext={quotaText}
         />
-        <p style={bodyStyle}>{quotaText}</p>
-        {expiry}
+        <div style={rowStyle}>
+          <span style={bodyStyle}>{quotaText}</span>
+          {expiryNode}
+        </div>
       </div>
     )
   }
   const sizeKnown = size > 0
-  const detail = sizeKnown
-    ? t('exactRemaining', { remain: formatNumber(remain), size: formatNumber(size) })
-    : t('creditPackageUnknownSize', { remain: formatNumber(remain) })
-  const percent = sizeKnown ? (remain / size) * 100 : undefined
-  const display = percent === undefined
-    ? t('percentUnknown')
-    : t('percentRemaining', { percent: formatPercent(percent) })
+  const isZeroQuota = size === 0 && remain === 0
+  const used = Math.max(0, size - remain)
+  const usedPercent = size > 0 ? Math.min(100, Math.max(0, Math.round((used / size) * 100))) : 0
+  const remainPercent = size > 0 ? (remain / size) * 100 : 0
+  const leftText = sizeKnown
+    ? `${formatNumber(used)} / ${formatNumber(size)} (${t('quotaUsedPercent', { percent: usedPercent })})`
+    : isZeroQuota
+      ? `0 / 0 (${t('quotaUsedPercent', { percent: 0 })})`
+      : t('creditPackageUnknownSize', { remain: formatNumber(remain) })
+  const rightText = sizeKnown || isZeroQuota
+    ? t('quotaRemainStats', { remain: formatNumber(remain) })
+    : t('percentUnknown')
+  const indeterminate = !sizeKnown && !isZeroQuota
   return (
     <div style={quotaGroupStyle}>
       <div style={quotaLabelStyle}>
-        <span>{label}</span>
-        <span>{display}</span>
+        <span style={{ fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>{label}</span>
+        <span style={{ ...bodyStyle, fontWeight: 500, color: remain > 0 ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)' }}>
+          {rightText}
+        </span>
       </div>
       <div
         style={progressTrackStyle}
         role="progressbar"
         aria-label={label}
-        /*
-         * No numeric value when the size is unknown: the range attributes are
-         * omitted so assistive technology reports an indeterminate bar rather
-         * than a second, louder repeat of the false 100%.
-         */
-        {...percent === undefined
-          ? { 'aria-valuetext': detail }
-          : { 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent }}
+        {...indeterminate
+          ? { 'aria-valuetext': leftText }
+          : { 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': usedPercent }}
       >
-        {percent === undefined ? null : <div style={progressFillStyle(percent)} />}
+        {size > 0 && usedPercent > 0 ? <div style={progressFillStyle(usedPercent)} /> : null}
       </div>
-      <p style={bodyStyle}>{detail}</p>
-      {expiry}
+      <div style={rowStyle}>
+        <span style={bodyStyle}>{leftText}</span>
+        {expiryNode}
+      </div>
     </div>
   )
 }
@@ -1300,19 +1311,17 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
                     {status.credits === undefined ? null : (
                       <div style={quotaListStyle}>
                         <h3 style={quotaTitleStyle}>{t('creditsDetailHeading')}</h3>
-                        {status.credits.accounts
-                          .filter((account: QoderWebCreditAccount) => account.remain > 0 || account.unlimited === true)
-                          .map((account, index) => (
-                            <CreditBar
-                              key={`${account.packageName}-${String(index)}`}
-                              label={account.packageName}
-                              remain={account.remain}
-                              size={account.size}
-                              unlimited={account.unlimited}
-                              packageEndTime={account.packageEndTime}
-                              t={t}
-                            />
-                          ))}
+                        {status.credits.accounts.map((account, index) => (
+                          <CreditBar
+                            key={`${account.packageName}-${String(index)}`}
+                            label={account.packageName}
+                            remain={account.remain}
+                            size={account.size}
+                            unlimited={account.unlimited}
+                            packageEndTime={account.packageEndTime}
+                            t={t}
+                          />
+                        ))}
                       </div>
                     )}
                   </div>

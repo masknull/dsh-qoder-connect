@@ -52,7 +52,7 @@ describe('fetchCredits shapes', () => {
     expect(credits).toEqual({
       total: 25,
       totalSize: 100,
-      accounts: [{ packageName: '个人额度', remain: 75, size: 100 }],
+      accounts: [{ packageName: '套餐内 Credits', remain: 75, size: 100 }],
     })
   })
 
@@ -65,7 +65,7 @@ describe('fetchCredits shapes', () => {
       expiresAt: '2026-10-01T00:00:00Z',
     })).fetchCredits()
     expect(credits.accounts).toEqual([
-      { packageName: '个人额度', remain: 70, size: 100, packageEndTime: '2026-10-01T00:00:00Z' },
+      { packageName: '套餐内 Credits', remain: 70, size: 100, packageEndTime: '2026-10-01T00:00:00Z' },
       { packageName: '组织资源包', remain: 400, size: 500, packageEndTime: '2026-10-01T00:00:00Z' },
     ])
     expect(credits.total).toBe(33)
@@ -90,7 +90,7 @@ describe('fetchCredits shapes', () => {
       userQuota: { total: 10, used: 1, remaining: 9, percentage: 10, unit: 'credits' },
       expiresAt: '',
     })).fetchCredits()
-    expect(credits.accounts[0]).toEqual({ packageName: '个人额度', remain: 9, size: 10, packageEndTime: '' })
+    expect(credits.accounts[0]).toEqual({ packageName: '套餐内 Credits', remain: 9, size: 10, packageEndTime: '' })
     expect(credits.cycleResetTime).toBe('')
   })
 
