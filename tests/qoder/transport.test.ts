@@ -417,6 +417,114 @@ test('QoderTransport surfaces the auth failure when the re-auth retry is rejecte
   assert.equal(exchanges, 3)
 })
 
+// The verbatim body Qoder answered with on 2026-09-26 22:32-22:36, for both
+// regions: a saturated per-model queue announced with HTTP 403 (or a 200 SSE
+// envelope carrying statusCodeValue 403).
+const qoderQueueBody = JSON.stringify({
+  code: '10605',
+  message: JSON.stringify({
+    isQueued: true,
+    modelKey: 'qfmodel',
+    queueCount: 8887,
+    queueType: 'p3',
+    retryAfterSeconds: 30,
+    serviceAvailable: true,
+    waitTime: 274,
+  }),
+})
+
+test('QoderTransport does not exchange a job token when the upstream answer is a queue', async () => {
+  // Coding that 403 as AUTH made the self-heal exchange fresh tokens against a
+  // queue no token can jump — three exchanges and a 4-second delay per chat,
+  // every chat, for the whole window — and, because the host retries
+  // RATE_LIMIT but deliberately never AUTH, it also suppressed the automatic
+  // retry that would have ridden out the 30-second window.
+  let exchanges = 0
+  let chatCalls = 0
+  const refreshed: number[] = []
+  const refreshFailed: Array<{ at: number; status?: number }> = []
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => Promise.resolve('pt-queue'),
+    resolveMachineId: () => 'machine-test',
+    onJobTokenRefreshed: info => { refreshed.push(info.at) },
+    onJobTokenRefreshFailed: info => { refreshFailed.push(info) },
+    fetch: (async (input: URL | Request): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) {
+        exchanges++
+        return new Response(JSON.stringify({ token: `jt-${exchanges}` }))
+      }
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: `user-${exchanges}` }))
+      if (url.includes('/agent_chat_generation')) {
+        chatCalls++
+        return new Response(
+          'data: ' + JSON.stringify({ statusCodeValue: 403, body: qoderQueueBody }) + '\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+  const request: GenerateOptions = {
+    provider: 'qoder-official',
+    model: 'cmodel',
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
+  }
+
+  await assert.rejects(async () => {
+    for await (const _chunk of transport.stream(request)) continue
+  }, (error: Error) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.code, 'RATE_LIMIT')
+    assert.equal(error.failure.status, 403)
+    assert.equal(error.failure.providerRetryAfterMs, 30_000)
+    return true
+  })
+  // One chat attempt, one credential exchange (the initial fetch), no heal:
+  // the queue answer surfaces immediately for the host's retry policy.
+  assert.equal(chatCalls, 1)
+  assert.equal(exchanges, 1)
+  assert.equal(refreshed.length, 0)
+  assert.equal(refreshFailed.length, 0)
+})
+
+test('QoderTransport reads a queued HTTP 403 from the chat error body', async () => {
+  // Same classification on the non-envelope path: the HTTP-level 403 body is
+  // read before failing so the queue markers reach the classifier.
+  let exchanges = 0
+  let chatCalls = 0
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => Promise.resolve('pt-queue-http'),
+    resolveMachineId: () => 'machine-test',
+    fetch: (async (input: URL | Request): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) {
+        exchanges++
+        return new Response(JSON.stringify({ token: `jt-${exchanges}` }))
+      }
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: `user-${exchanges}` }))
+      if (url.includes('/agent_chat_generation')) {
+        chatCalls++
+        return new Response(qoderQueueBody, { status: 403 })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+  const request: GenerateOptions = {
+    provider: 'qoder-official',
+    model: 'cmodel',
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
+  }
+
+  await assert.rejects(async () => {
+    for await (const _chunk of transport.stream(request)) continue
+  }, (error: Error) => error instanceof QoderLlmError && error.code === 'RATE_LIMIT')
+  assert.equal(chatCalls, 1)
+  assert.equal(exchanges, 1)
+})
+
 test('QoderTransport reports an exhausted self-heal once, not once per host retry', async () => {
   // The observed outage: one upstream rejection that no fresh token could
   // clear, retried 59 times by the host across 75 steps. The transport

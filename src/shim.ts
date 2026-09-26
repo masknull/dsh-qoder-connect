@@ -223,11 +223,17 @@ export function createQoderShim(options: QoderShimOptions): QoderShim {
     const result = await client.chatStream(raw, controller.signal)
 
     if (!result.ok) {
+      // The message quotes the shim's OUTBOUND status, never the upstream's
+      // internal one: the harness's pi-ai error classifier matches 401/403 in
+      // message text before anything else, so quoting the upstream's 403 here
+      // (as "(http 403)") turned a queue answer into a reported credential
+      // failure ("API 密钥无效"). The upstream's real status still travels in
+      // the transport failure's structured `status` field.
       writeOpenAIError(
         res,
         KIND_STATUS[result.kind],
         result.kind,
-        `${providerId} upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}`,
+        `${providerId} upstream ${result.kind} (http ${KIND_STATUS[result.kind]}): ${result.message.slice(0, 400)}`,
       )
       return
     }

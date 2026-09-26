@@ -286,6 +286,13 @@ export class DefaultQoderTransport implements QoderTransport {
       // genuinely revoked PAT fails the retry identically, and the retry
       // trades one extra exchange call against turning a transient gateway
       // state into a false "sign in again" report for the user.
+      //
+      // Note what is NOT healed: a 401/403 the upstream used to announce a
+      // saturated queue (body carries code 10605 / isQueued / retryAfterSeconds)
+      // now classifies as RATE_LIMIT, not AUTH — see qoderQueueSignal. A fresh
+      // token cannot jump a queue, so those rejections surface immediately and
+      // let the host's retry policy (which retries RATE_LIMIT, never AUTH)
+      // ride out the window instead.
       if (!isQoderAuthRejection(error) || options.signal?.aborted) throw error
       this.logger?.warn?.(
         '[Qoder Stream] Chat rejected as unauthorized; exchanging a fresh job token and retrying once',
@@ -300,11 +307,18 @@ export class DefaultQoderTransport implements QoderTransport {
     // departing concurrent waiter (quota poll, catalog sweep), and a retry
     // joined to it would be cancelled by a path unrelated to the chat.
     let lastRejection: unknown
+    // The rotation this request armed for its own heal. The pending notice is
+    // instance state shared by every in-flight request on this transport, so
+    // discarding on failure must clear only what this request armed — a
+    // concurrent request may have armed its own (successful) notice after ours
+    // and deserves it.
+    let noticeAt: number | undefined
     for (let round = 0; round < 2; round++) {
       const refreshed = await this.auth.exchangeFresh(pat, options.signal)
       // The rotation has happened; the first chat accepted afterwards — this
       // round's retry or any subsequent one — is what makes it reportable.
       this.pendingRefreshAt = Date.now()
+      noticeAt = this.pendingRefreshAt
       try {
         yield* this.streamChat(options, model, refreshed, messages, () => {
           this.onChatAccepted()
@@ -335,7 +349,9 @@ export class DefaultQoderTransport implements QoderTransport {
     // would otherwise have qualified for is void. Dropping it here is what
     // stops a later, unrelated chat acceptance from printing "已自动重换并恢复"
     // with a stale rotation time — the row that made the notice look broken.
-    this.discardPendingRefreshNotice()
+    // Only this request's own notice is void, though: a concurrent heal that
+    // armed the pending slot after ours must keep it.
+    if (this.pendingRefreshAt === noticeAt) this.discardPendingRefreshNotice()
     // Report the failed heal once per outage. The success notice covers "the
     // rotation rescued the chat"; without this, a rejection the rotation could
     // NOT rescue was announced nowhere at all, and the user was left reading a

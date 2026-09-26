@@ -13,7 +13,15 @@
  *
  * and its failure mirror, printed when the heal ran and still lost:
  *
- *     [icon] qoder · jobToken 已重换但仍被上游拒绝（自愈未恢复）
+ *     [icon] qoder · jobToken 已重换但仍被上游拒绝（自愈未恢复，该请求已失败）
+ *
+ * The mirror used to point the reader at "the error above", which assumed the
+ * failed heal belonged to a chat rendering a card in this conversation. A heal
+ * inside the session-title request shares the transport and the notice state
+ * but renders no card, so the pointer led nowhere. It now states only the
+ * facts. Attribution stays best effort (`lastRunningAgent`): with two agents
+ * running concurrently the row can land in the other one's conversation, which
+ * is a display imprecision, never a wrong heal.
  *
  * The host half alone produces these rows; without a client renderer the title
  * is the recorded name, which is why it is the ASCII `qoder`.

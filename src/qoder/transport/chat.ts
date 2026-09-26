@@ -11,6 +11,7 @@ import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import type { QoderRegion } from '../region.ts'
 import { getQoderChatUrl } from './endpoints.ts'
 import { redactLogValue, type QoderLogger } from './logging.ts'
+import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
 import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBody } from './wire/encoding.ts'
 import { buildQoderRequestBody } from './wire/serialize.ts'
@@ -89,7 +90,21 @@ export async function* streamQoderChat(
     })
     resetIdleTimer()
     if (!response.ok) {
-      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}.`, response)
+      // Read the (bounded) error body before failing: a 401/403 the upstream
+      // used to announce its queue carries code 10605 / isQueued /
+      // retryAfterSeconds, and only the body separates a throttle from a real
+      // authorization rejection. Without it every such answer looked like a
+      // dead credential and triggered a job-token exchange that cannot jump
+      // a queue.
+      let errorBody: string | undefined
+      try {
+        errorBody = await readLimitedText(response, defaultMaxErrorBytes, 'Qoder chat error response')
+      } catch {
+        // A body that cannot be read (or that exceeds the cap) still fails the
+        // request; it just classifies from status and headers alone.
+        errorBody = undefined
+      }
+      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}.`, response, errorBody)
     }
     if (!response.body) {
       throw new QoderLlmError('Qoder response contains no readable body stream.', 'EMPTY_RESPONSE')

@@ -318,6 +318,18 @@ describe('kindFromQoderFailure and classifyUpstreamError', () => {
     expect(kindFromQoderFailure({ code: 'WEIRD_NEW_THING' })).toBe('server')
   })
 
+  it('routes Qoder queue answers to soft_rate even with a 401/403 status', () => {
+    // The queue answer keeps the 401/403 status that used to claim the auth
+    // arm first: kind 'auth' made the shim answer 401 with type "auth", the
+    // harness rendered "API 密钥无效", and nothing retried it (observed
+    // 2026-09-26 23:30, after the transport-side heal was already fixed).
+    expect(kindFromQoderFailure({ code: 'RATE_LIMIT', status: 403 })).toBe('soft_rate')
+    expect(kindFromQoderFailure({ code: 'RATE_LIMIT', status: 401 })).toBe('soft_rate')
+    expect(kindFromQoderFailure({ code: 'RATE_LIMIT' })).toBe('soft_rate')
+    // A real authorization failure is unchanged.
+    expect(kindFromQoderFailure({ code: 'AUTH', status: 403 })).toBe('auth')
+  })
+
   it('reads an HTTP answer status-first, then body markers', () => {
     expect(KIND_STATUS).toEqual({
       missing_credential: 401, auth: 401, soft_rate: 429, quota_exceeded: 402, server: 502, client: 400,
@@ -336,6 +348,22 @@ describe('kindFromQoderFailure and classifyUpstreamError', () => {
     expect(classifyUpstreamError(500, 'boom')).toBe('server')
     expect(classifyUpstreamError(0, 'socket died')).toBe('server')
     expect(classifyUpstreamError(404, 'no such model')).toBe('client')
+  })
+
+  it('reads Qoder queue answers as soft_rate, not auth', () => {
+    // The verbatim 2026-09-26 window: a 401/403 whose body announces a
+    // saturated queue. Status alone said "auth", which parked a healthy
+    // account and blocked the retry that would have cleared it.
+    const queueBody = JSON.stringify({
+      code: '10605',
+      message: JSON.stringify({ isQueued: true, modelKey: 'qfmodel', queueCount: 8887, queueType: 'p3', retryAfterSeconds: 30, serviceAvailable: true, waitTime: 274 }),
+    })
+    expect(classifyUpstreamError(403, queueBody)).toBe('soft_rate')
+    expect(classifyUpstreamError(401, queueBody)).toBe('soft_rate')
+    expect(classifyUpstreamError(200, queueBody)).toBe('soft_rate')
+    expect(classifyUpstreamError(403, '{"serviceAvailable":false,"retryAfterSeconds":27}')).toBe('soft_rate')
+    // Real authorization answers keep their classification.
+    expect(classifyUpstreamError(403, '{"message":"invalid job token"}')).toBe('auth')
   })
 
   it('normalizeCredits strips a trailing unit word but keeps the multiplier verbatim', () => {

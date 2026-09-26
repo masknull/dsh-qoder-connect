@@ -448,6 +448,30 @@ describe('Qoder shim error mapping', () => {
     expect((await auth.json() as { error: { type: string } }).error.type).toBe('auth')
   })
 
+  it('quotes the outbound status, never the upstream queue 403', async () => {
+    // The harness's pi-ai error classifier matches 401/403 in message text
+    // ahead of 429/rate-limit. A queue answer reaching it with the upstream's
+    // 403 in the text read as "API 密钥无效" (observed 2026-09-26 23:30 and
+    // 23:40), so the shim quotes its own outbound code.
+    const harness = await startShim(() => ({
+      ok: false,
+      status: 403,
+      kind: 'soft_rate',
+      message: 'Qoder is queueing requests (retry after 30s)',
+    }))
+    const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${harness.shim.token()}` },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(response.status).toBe(429)
+    const body = await response.json() as { error: { type: string, code: string, message: string } }
+    expect(body.error.type).toBe('soft_rate')
+    expect(body.error.code).toBe('soft_rate')
+    expect(body.error.message).toContain('(http 429)')
+    expect(body.error.message).not.toMatch(/\b(?:401|403)\b/u)
+  })
+
   it('truncates a runaway upstream message to 400 characters', async () => {
     const long = 'x'.repeat(1000)
     const harness = await startShim(() => ({

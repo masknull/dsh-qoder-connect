@@ -28,6 +28,11 @@ interface InFlightEntry {
   timeout: ReturnType<typeof setTimeout>
 }
 
+interface HealFlightEntry {
+  promise: Promise<CosyCredentials>
+  settled: boolean
+}
+
 export interface QoderAuthServiceOptions {
   fetch?: typeof fetch | undefined
   timeoutMs?: number | undefined
@@ -57,6 +62,14 @@ async function waitForFlight(
 export class QoderAuthService {
   private readonly cache = new Map<string, CachedEntry>()
   private readonly inFlight = new Map<string, InFlightEntry>()
+  /**
+   * Self-heal exchanges in flight, keyed like the cache. Deliberately separate
+   * from {@link inFlight}: that flight may be aborted by a departing
+   * concurrent waiter (a quota poll, a catalog sweep) whose abort has nothing
+   * to do with the heal, so healers must not share its controller. Concurrent
+   * heals instead share this flight — see {@link exchangeFresh}.
+   */
+  private readonly healFlights = new Map<string, HealFlightEntry>()
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
   private readonly resolveMachineId: () => string
@@ -84,11 +97,33 @@ export class QoderAuthService {
    * (the quota poll, the catalog sweep), and a retry that joins it would then
    * be cancelled by a path that has nothing to do with the chat. The result
    * replaces the cache entry.
+   *
+   * Two heals for the same credential that overlap share one exchange instead
+   * of racing: each racer's `clear` deleted what the previous one had just
+   * cached, and its own `cache.set` overwrote the other's — so the cache could
+   * end up naming a token the losing request was no longer using, and with an
+   * upstream that retires the previous job token on a new exchange the racers
+   * also invalidated each other's credentials (one chat recovering while a
+   * concurrent one failed, exactly the 2026-09-26 22:36 observation). The
+   * shared exchange runs on its own timeout signal, so one healer's abort —
+   * its chat request went away — cannot cancel an exchange other healers, and
+   * the future `getCredentials` callers about to read the refreshed cache, are
+   * waiting on.
    */
   async exchangeFresh(pat: string, signal?: AbortSignal): Promise<CosyCredentials> {
+    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
+    const existing = this.healFlights.get(cacheKey)
+    if (existing !== undefined && !existing.settled) {
+      return waitForFlight(existing.promise, signal)
+    }
     this.clear(pat)
-    const creds = await this.exchangeAndResolve(pat, signal ?? AbortSignal.timeout(this.timeoutMs))
-    return creds
+    const created = { settled: false } as HealFlightEntry
+    created.promise = this.exchangeAndResolve(pat, AbortSignal.timeout(this.timeoutMs)).finally(() => {
+      created.settled = true
+      if (this.healFlights.get(cacheKey) === created) this.healFlights.delete(cacheKey)
+    })
+    this.healFlights.set(cacheKey, created)
+    return waitForFlight(created.promise, signal)
   }
 
   async getCredentials(

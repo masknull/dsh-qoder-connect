@@ -63,11 +63,17 @@ function parseEnvelope(rawData: string): QoderSseEnvelope {
     // and that body is where the real reason lives (quota exhausted, region
     // permission, risk control, ...). Dropping it left every such rejection
     // reading as a bare "invalid API key" with nothing to act on.
+    //
+    // The body is also handed to the classifier itself: a 401/403 envelope
+    // whose body carries the queue markers (code 10605, isQueued,
+    // queueCount, retryAfterSeconds) is a throttle, not an authorization
+    // failure, and must not send the transport into a job-token exchange.
     throw qoderHttpError(
       envelope.body
         ? `Qoder service returned upstream error status ${status}: ${envelope.body}`
         : `Qoder service returned upstream error status ${status}.`,
       { status },
+      envelope.body,
     )
   }
   if (envelope.body !== undefined && typeof envelope.body !== 'string') {

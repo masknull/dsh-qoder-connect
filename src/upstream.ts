@@ -43,6 +43,7 @@ import { PROBE_MAX_TOKENS, PROBE_PROMPT, type ProbeAttempt } from './probe.ts'
 import type { QoderCatalogModel } from './qoder/catalog.ts'
 import type { QoderRegion } from './qoder/region.ts'
 import type { QoderAccountInfo, QoderQuotaUsage } from './qoder/account.ts'
+import { qoderQueueSignal } from './qoder/errors.ts'
 import { createQoderTransport, type QoderCheckInResult, type QoderTransport } from './qoder/transport/index.ts'
 import type { QoderModelBilling, QoderModelInfo, QoderModelReasoning } from './catalog.ts'
 
@@ -129,6 +130,11 @@ export function normalizeCredits(credits: string | undefined): string | undefine
  */
 export function classifyUpstreamError(status: number, body: string): UpstreamErrorKind {
   const lower = body.toLowerCase()
+  // Qoder announces a saturated queue (or an unavailable region service) with
+  // a 401/403 whose body carries the queue markers. That is a throttle: the
+  // host retries soft_rate and honors retryAfterSeconds, while 'auth' would
+  // park the account until the user intervenes.
+  if (qoderQueueSignal(body) !== undefined) return 'soft_rate'
   if (status === 402) return 'quota_exceeded'
   if (status === 429) return 'soft_rate'
   if (status === 401 || status === 403) return 'auth'
@@ -151,11 +157,18 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
  * The transport's taxonomy (`src/qoder/errors.ts`) codes an HTTP 402 as
  * `INVALID_REQUEST`, so the status gets the last say for the quota and auth
  * families before the code-based defaults apply.
+ *
+ * `RATE_LIMIT` is tested before the auth family because the upstream's queue
+ * answer keeps its 401/403 status: a saturated qfmodel queue reads
+ * `code: RATE_LIMIT, status: 403` (body carries 10605/isQueued/
+ * retryAfterSeconds), and letting the status arm claim it reported a dead
+ * credential — which the host never retries — instead of a throttle it would.
  */
 export function kindFromQoderFailure(failure: { code: string; status?: number | undefined }): UpstreamErrorKind {
   if (failure.code === 'MISSING_CREDENTIAL') return 'missing_credential'
+  if (failure.code === 'RATE_LIMIT') return 'soft_rate'
   if (failure.code === 'AUTH' || failure.status === 401 || failure.status === 403) return 'auth'
-  if (failure.code === 'RATE_LIMIT' || failure.status === 429) return 'soft_rate'
+  if (failure.status === 429) return 'soft_rate'
   if (failure.code === 'QUOTA' || failure.status === 402) return 'quota_exceeded'
   if (failure.code.startsWith('INVALID_') || failure.code.startsWith('UNSUPPORTED_') || failure.code === 'ATTACHMENT') {
     return 'client'

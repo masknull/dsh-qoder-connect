@@ -2,7 +2,7 @@
   "name": "dsh-qoder-connect",
   "displayName": "DSH Qoder Connect",
   "description": "将 Qoder（国内版 / 国际版）的模型接入 DeepSeek Harness — bring Qoder (CN & international) models into DeepSeek Harness.",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "author": "corrinehu",
   "keywords": [
     "dsh-plugin",

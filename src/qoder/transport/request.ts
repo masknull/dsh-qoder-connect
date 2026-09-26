@@ -228,9 +228,13 @@ export async function openApiJsonRequest<T>(
 
     if (!response.ok) {
       options.logger?.error?.(`[Qoder ${options.operation}] Request failed`, redactLogPayload(text))
+      // The body rides along so a 401/403 that is really the upstream's
+      // queue answer (code 10605 / isQueued) classifies as a rate limit
+      // instead of an authorization failure — see qoderQueueSignal.
       throw qoderHttpError(
         `Failed to execute Qoder ${options.operation} with status ${response.status}.`,
         response,
+        text,
       )
     }
 

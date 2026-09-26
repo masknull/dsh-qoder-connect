@@ -834,6 +834,12 @@ declare function classifyUpstreamError(status: number, body: string): UpstreamEr
  * The transport's taxonomy (`src/qoder/errors.ts`) codes an HTTP 402 as
  * `INVALID_REQUEST`, so the status gets the last say for the quota and auth
  * families before the code-based defaults apply.
+ *
+ * `RATE_LIMIT` is tested before the auth family because the upstream's queue
+ * answer keeps its 401/403 status: a saturated qfmodel queue reads
+ * `code: RATE_LIMIT, status: 403` (body carries 10605/isQueued/
+ * retryAfterSeconds), and letting the status arm claim it reported a dead
+ * credential — which the host never retries — instead of a throttle it would.
  */
 declare function kindFromQoderFailure(failure: {
   code: string;

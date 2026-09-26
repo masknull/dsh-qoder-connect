@@ -645,10 +645,17 @@ function jobTokenHintText(at: number): string {
  * fresh token is not necessarily an authorization problem at all, and the real
  * reason travels in the failure message itself (see the SSE envelope body).
  * Claiming "quota" or "revoked" here would be a guess presented as a finding.
+ *
+ * It also must not point the reader at "the error above": the failed heal does
+ * not always belong to a chat whose failure renders a card in this
+ * conversation. A heal inside the session-title request — same transport,
+ * same shared notice state — fails silently there, so the row used to send
+ * users looking for an error card that does not exist. The row states only
+ * what is known: the retry ran, it did not recover, the request failed.
  */
 function jobTokenRefreshFailedHintText(at: number): string {
   const time = new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
-  return `jobToken 已重换但仍被上游拒绝（${time}）— 自愈未恢复，请查看上方错误详情`
+  return `jobToken 已重换但仍被上游拒绝（${time}）— 自愈未恢复，该请求已失败`
 }
 
 /** Build one variant's stores, transport, and probe state. */

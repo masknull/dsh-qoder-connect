@@ -163,3 +163,63 @@ test('QoderAuthService classifies malformed exchange JSON as a protocol failure'
     error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE'
   ))
 })
+
+test('QoderAuthService shares one exchange between overlapping heal attempts', async () => {
+  // Two chats rejected at the same moment used to run two overlapping
+  // exchangeFresh calls; each one's cache clear/set raced the other and, with
+  // an upstream retiring the previous job token on a new exchange, they
+  // invalidated each other's credentials — one chat recovered, the other
+  // failed (observed 2026-09-26 22:36). Overlapping heals must share one
+  // exchange.
+  let exchangeCalls = 0
+  const fetchMock = async (input: URL | Request): Promise<Response> => {
+    if (String(input).includes('/jobToken/exchange')) {
+      exchangeCalls++
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return new Response(JSON.stringify({ token: 'jt-heal-shared', expires_in: 3_600_000 }))
+    }
+    return new Response(JSON.stringify({ id: 'user-heal' }))
+  }
+  const service = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+
+  const [first, second] = await Promise.all([
+    service.exchangeFresh('pt-heal'),
+    service.exchangeFresh('pt-heal'),
+  ])
+  assert.equal(exchangeCalls, 1, 'overlapping heal exchanges collapse into one upstream call')
+  assert.equal(first.authToken, 'jt-heal-shared')
+  assert.equal(second, first)
+})
+
+test('QoderAuthService keeps a shared heal exchange alive when one healer aborts', async () => {
+  // The heal exchange must not run on any caller's signal: the initiating
+  // chat going away (user stop, host cancel) used to cancel the exchange that
+  // the other healers — and the cache refresh after it — were waiting on.
+  const fetchMock = async (input: URL | Request): Promise<Response> => {
+    if (String(input).includes('/jobToken/exchange')) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return new Response(JSON.stringify({ token: 'jt-survivor', expires_in: 3_600_000 }))
+    }
+    return new Response(JSON.stringify({ id: 'user-survivor' }))
+  }
+  const service = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+
+  const controller = new AbortController()
+  const initiator = service.exchangeFresh('pt-survivor', controller.signal)
+  const joiner = service.exchangeFresh('pt-survivor')
+  controller.abort()
+  await assert.rejects(initiator, (error: Error) => (
+    error instanceof QoderLlmError && error.code === 'ABORTED'
+  ))
+  const joinerCredentials = await joiner
+  assert.equal(joinerCredentials.authToken, 'jt-survivor')
+  // and the refreshed credential is cached for the next getCredentials caller.
+  const cached = await service.getCredentials('pt-survivor')
+  assert.equal(cached.authToken, 'jt-survivor')
+})
