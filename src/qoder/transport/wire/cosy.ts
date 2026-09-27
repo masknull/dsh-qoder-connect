@@ -140,6 +140,9 @@ export function buildAuthHeaders(
     .digest('hex')
   const bodyLen = body ? (Buffer.isBuffer(body) ? body.length : Buffer.from(body).length).toString() : '0'
 
+  // Only reached when a caller assembled credentials without an id: the
+  // default chain reads Qoder's own file and otherwise creates the plugin's
+  // seed inside its data directory — it no longer writes near $HOME.
   const machineID = creds.machineID || getMachineId()
 
   return {

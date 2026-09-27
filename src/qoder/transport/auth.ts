@@ -78,6 +78,9 @@ export class QoderAuthService {
   constructor(options: QoderAuthServiceOptions = {}) {
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.timeoutMs = options.timeoutMs ?? defaultAuthTimeoutMs
+    // The same default chain every other caller gets: the official Qoder
+    // CLI's id first, this plugin's own data-directory seed as the create
+    // point — never a file under the OS home directory.
     this.resolveMachineId = options.resolveMachineId ?? getMachineId
     this.region = options.region ?? 'global'
     this.logger = options.logger
