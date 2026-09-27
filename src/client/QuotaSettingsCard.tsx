@@ -98,7 +98,7 @@ export interface QuotaSection {
 }
 
 export type QuotaSettingsCardProps =
-  PropsRuntime<'settings.plugin.item'>
+  PropsRuntime<'plugin-settings.item'>
   & Partial<QuotaSettingsCardInjected>
 
 /** The settings fields this card edits, in display order. */

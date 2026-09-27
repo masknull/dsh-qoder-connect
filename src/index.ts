@@ -1151,7 +1151,10 @@ async function cleanupEntryConfig(ctx: Parameters<typeof apply>[0], ownKeys: rea
         : undefined
       const editor = (own ?? await new Promise<unknown>(resolve => {
         ctx.inject(['settings'], settingsCtx => {
-          const owner = (settingsCtx.settings as { ownerContext?: { get?: (name: string) => unknown } } | undefined)?.ownerContext
+          // `ownerContext` is private on the 0.1.7 SettingsForms class, so it
+          // reaches this probe through the double cast rather than the typed
+          // face — the shape the host's own root context mounts it as.
+          const owner = (settingsCtx.settings as unknown as { ownerContext?: { get?: (name: string) => unknown } } | undefined)?.ownerContext
           const viaOwner = typeof owner?.get === 'function'
             ? (() => { try { return owner.get.call(owner, 'configEditor') } catch { return undefined } })()
             : undefined

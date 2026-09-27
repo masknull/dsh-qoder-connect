@@ -33,6 +33,7 @@ import {
   LlmError,
   ReasoningEffortId,
   ToolCallId,
+  type ContentBlock,
   type GenerateOptions,
   type Message,
   type StreamChunk,
@@ -254,9 +255,9 @@ function decodeDataImage(url: string): { mediaType: ImageMediaType; data: Uint8A
 async function openAiContentBlocks(
   content: unknown,
   role: 'user' | 'assistant',
-  imagesAs: { commit(part: { mediaType: ImageMediaType; data: Uint8Array }): Promise<Message['content'][number]> } | undefined,
-): Promise<Message['content']> {
-  const blocks: Message['content'] = []
+  imagesAs: { commit(part: { mediaType: ImageMediaType; data: Uint8Array }): Promise<ContentBlock> } | undefined,
+): Promise<ContentBlock[]> {
+  const blocks: ContentBlock[] = []
   const parts: readonly unknown[] = typeof content === 'string' || content === null || content === undefined
     ? (typeof content === 'string' && content !== '' ? [{ type: 'text', text: content }] : [])
     : Array.isArray(content)

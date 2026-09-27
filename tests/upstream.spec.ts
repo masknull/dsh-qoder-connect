@@ -175,12 +175,17 @@ describe('chatStream request translation', () => {
     expect(options.stop).toEqual(['X'])
     expect(options.reasoningEffort).toBe('high')
     expect(options.tools).toEqual([{ name: 'lookup', description: 'd', parameters: { type: 'object' } }])
-    expect(options.messages.map(message => message.role)).toEqual(['user', 'assistant', 'user'])
+    expect(options.messages.map(message => message.role)).toEqual(['user', 'assistant', 'tool'])
     const assistant = options.messages[1]!
     expect(assistant.content.some(block => block.type === 'tool-call' && block.id === 'tc-1')).toBe(true)
+    // DSH 0.1.7 carries the tool result as one first-class tool-role message.
     const toolResult = options.messages[2]!
-    expect(toolResult.content[0]).toMatchObject({ type: 'tool-result', toolCallId: 'tc-1', isError: false })
-    expect((toolResult.content[0] as { content: unknown }).content).toEqual([{ type: 'text', text: 'ok' }])
+    expect(toolResult.role).toBe('tool')
+    if (toolResult.role === 'tool') {
+      expect(String(toolResult.toolCallId)).toBe('tc-1')
+      expect(toolResult.isError).toBe(false)
+      expect(toolResult.content).toEqual([{ type: 'text', text: 'ok' }])
+    }
   })
 
   it('accepts a string stop and filters non-string entries from arrays', async () => {

@@ -95,7 +95,7 @@ export const QODER_GLOBAL_CARD: QoderCardVariant = {
 export const QODER_CARD_VARIANTS: readonly QoderCardVariant[] = [QODER_CN_CARD, QODER_GLOBAL_CARD]
 /** Props delivered by the Plugin configuration item slot. */
 export type QoderPluginCardProps =
-  PropsRuntime<'settings.plugin.item'>
+  PropsRuntime<'plugin-settings.item'>
   & Partial<QoderPluginCardInjected>
 
 const POLL_INTERVAL_MS = 60_000

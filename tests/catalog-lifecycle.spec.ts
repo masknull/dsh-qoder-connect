@@ -43,7 +43,11 @@ let QoderAuth: typeof import('../src/auth.ts')
  */
 
 class MemorySettings extends SettingsProvider {
-  readonly writable = true
+  // 0.1.7 declares `writable` as an accessor on SettingsForms; overriding it
+  // with a plain field is a type error, so the stub keeps the same shape.
+  override get writable(): boolean {
+    return true
+  }
   private storedDocument: Record<string, unknown> = {}
 
   protected load(): Promise<Record<string, unknown>> {
