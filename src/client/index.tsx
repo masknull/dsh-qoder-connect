@@ -71,13 +71,6 @@ export const name = 'dsh-qoder-connect-client'
  * (`settings.plugin.item`) is declared by
  * `@deepseek-ai/dsh-client-ui-settings-plugins`. Those packages are named in
  * the package's `dsh.client.inject` list.
- *
- * NOT declared here: the settings services. `settingsScope` (0.1.5) does not
- * exist at all on 0.1.7 — a static service dependency on it is what left this
- * plugin's client activation pending forever — and `configForms` (0.1.7) does
- * not exist on 0.1.5. Both are waited for with `ctx.inject([...], callback)`
- * below, where a missing service simply never calls back instead of holding
- * activation.
  */
 // `modelDirectories` reads the active session through `remote.session`.
 // Declaring that dependency at the client entry is required by the Desktop
@@ -90,30 +83,6 @@ const VARIANT_STATUS: Record<string, string> = {
   qoder: QODER_STATUS_PATH,
   'qoder-global': QODER_GLOBAL_STATUS_PATH,
 }
-
-/**
- * The settings namespace the 0.1.5 Host serves this plugin's quota section
- * under — the same namespace the host half registers with
- * `settings.installSection`.
- */
-const QUOTA_SETTINGS_NAMESPACE = 'qoder-quota'
-
-/**
- * The 0.1.7 `configForms` key for this plugin: the PROFILE ENTRY ID.
- *
- * 0.1.7 keys a settings form by the id of the profile row the plugin runs as,
- * not by its package name: `dsh-settings`' `describe()` publishes
- * `ns: entry.options.id` for the rows `configEditor.configuration()` yields
- * (`dsh-settings/lib/index.js:411-421`, `dsh-config-editor/lib/index.js:29-44`),
- * and cordis keeps an explicit row id (`cordis-plugin-loader/lib/index.js:162`).
- * This bundle's own patch inserts that row with an explicit id —
- * `cordis.patch.yml`: `- insert: [{ id: llm-qoder, name: dsh-qoder-connect }]` —
- * so `llm-qoder` is the namespace the Host serves here. A profile that composes
- * this bundle under some other id (the package name is what an entry without an
- * explicit id falls back to) would serve that id instead; the card then reads
- * `unavailable` and stays hidden rather than showing another plugin's values.
- */
-const ENTRY_ID = 'llm-qoder'
 
 /**
  * The shared 《插件设置》 block's slot and entry ids.
@@ -133,19 +102,6 @@ const SHARED_ITEM_SLOT = 'plugin-settings.item'
 const SHARED_ITEM_ID = 'dsh-qoder-connect'
 /** The shared block's title, fixed by the contract so all three plugins agree. */
 const SHARED_SECTION_LABEL = '插件设置'
-
-/**
- * The 0.1.7 settings face, read structurally inside the `configForms` callback.
- *
- * The 0.1.5 typings this bundle compiles against do not declare `configForms`
- * (it replaced `settingsScope` in 0.1.7), so the service is described here by
- * the shape the 0.1.7 provider has: `get(entryId)` hands back the entry's form,
- * created on demand and never throwing for an unknown id (an unserved namespace
- * simply reads `unavailable`).
- */
-interface ConfigFormsFace {
-  get: (entryId: string) => QuotaSettingsScope<QuotaSection>
-}
 
 /**
  * The shared 《插件设置》 section the 0.1.7 card list lives in.
@@ -242,22 +198,17 @@ export function apply(ctx: ClientContext): void {
 
     // Unified Qoder plugin configuration card: merges sidebar quota settings,
     // China variant, and Global variant into one single card titled "Qoder".
-    const registerUnifiedCard = (slot: 'settings.plugin.item' | 'plugin-settings.item'): (() => void) => {
+    // The shared 《插件设置》 block dispatches its `list` entries by id
+    // (ascending order); the card rank is fixed across the three connect
+    // plugins: the first sibling takes 10, the second 20, this one 30.
+    const registerUnifiedCard = (): (() => void) => {
       const inject = (): QoderPluginCardInjected => ({
         t,
         scope: quotaScope,
         signedIn: () => quotaSignInState(),
         unified: true,
       })
-      // 0.1.5 dispatches `settings.plugin.item` by the namespace the card edits
-      // (a keyed slot, ordered by priority); the shared 0.1.7 block dispatches
-      // its `list` entries by id (ordered by order). The shared block's card
-      // rank is fixed across the three connect plugins (ascending order):
-      // session-prompt 10 / workbuddy 20 / qoder 30.
-      if (slot === 'settings.plugin.item') {
-        return ctx.slots.inject(slot, () => ctx.slots.register({ name: slot, key: 'qoder', priority: 50, inject }, QoderPluginCard))
-      }
-      return ctx.slots.inject(slot, () => ctx.slots.register({ name: slot, id: SHARED_ITEM_ID, order: 30, inject }, QoderPluginCard))
+      return ctx.slots.inject(SHARED_ITEM_SLOT, () => ctx.slots.register({ name: SHARED_ITEM_SLOT, id: SHARED_ITEM_ID, order: 30, inject }, QoderPluginCard))
     }
 
     /**
@@ -293,7 +244,7 @@ export function apply(ctx: ClientContext): void {
             console.error('[dsh-qoder-connect] shared plugin-settings block lost the race; attaching to the winner:', error)
           }
         }
-        const disposeItem = registerUnifiedCard(SHARED_ITEM_SLOT)
+        const disposeItem = registerUnifiedCard()
         return () => {
           disposeItem()
           disposeContainer?.()

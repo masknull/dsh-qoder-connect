@@ -40,20 +40,22 @@ const VARIANT_STATUS: Record<string, string> = {
 /**
  * The configuration-face constants, mirroring src/client/index.tsx.
  *
- * `QUOTA_SETTINGS_NAMESPACE` is the 0.1.5 namespace the Host serves this
- * plugin's quota section under; `ENTRY_ID` is the 0.1.7 `configForms` key,
- * which is the PROFILE ENTRY ID (this bundle's patch inserts the row as
- * `llm-qoder`), not the package name. The `SHARED_*` pair is the《插件设置》
- * block the three connect plugins rendezvous on.
+ * The `SHARED_*` group is the 《插件设置》 block the three connect plugins
+ * rendezvous on: the container slot, its id and order, the child slot, this
+ * plugin's entry id, and the block's title.
  */
-const QUOTA_SETTINGS_NAMESPACE = 'qoder-quota'
-const ENTRY_ID = 'llm-qoder'
 const SHARED_SECTION_SLOT = 'settings.section'
 const SHARED_SECTION_ID = 'plugin-settings'
 const SHARED_SECTION_ORDER = 900
 const SHARED_ITEM_SLOT = 'plugin-settings.item'
 const SHARED_ITEM_ID = 'dsh-qoder-connect'
 const SHARED_SECTION_LABEL = '插件设置'
+
+/** A minimal stand-in for the plugin-owned settings scope (load() never resolves in the mirror). */
+const stubQuotaScope = {
+  getSnapshot: () => ({ status: 'loading', value: undefined, writable: true }),
+  subscribe: () => () => {},
+}
 
 /** Minimal component stand-in: the mirror never renders anything. */
 const Component = (): null => null
@@ -88,17 +90,17 @@ function apply(ctx: any): void {
     }
     // Unified Qoder plugin configuration card: merges sidebar quota settings,
     // China variant, and Global variant into one single card titled "Qoder".
-    const registerUnifiedCard = (slot: 'settings.plugin.item' | 'plugin-settings.item'): (() => void) => {
+    // The shared 《插件设置》 block dispatches its `list` entries by id
+    // (ascending order); the card rank is fixed across the three connect
+    // plugins: the first sibling takes 10, the second 20, this one 30.
+    const registerUnifiedCard = (): (() => void) => {
       const inject = () => ({
         t,
         scope: quotaScope,
         signedIn: () => ({ cn: false, global: false }),
         unified: true,
       })
-      if (slot === 'settings.plugin.item') {
-        return ctx.slots.inject(slot, () => ctx.slots.register({ name: slot, key: 'qoder', priority: 50, inject }, Component))
-      }
-      return ctx.slots.inject(slot, () => ctx.slots.register({ name: slot, id: SHARED_ITEM_ID, order: 50, inject }, Component))
+      return ctx.slots.inject(SHARED_ITEM_SLOT, () => ctx.slots.register({ name: SHARED_ITEM_SLOT, id: SHARED_ITEM_ID, order: 30, inject }, Component))
     }
     const joinSharedSettingsBlock = (): void => {
       ctx.slots.inject(SHARED_SECTION_SLOT, () => {
@@ -118,30 +120,20 @@ function apply(ctx: any): void {
             console.error('[dsh-qoder-connect] shared plugin-settings block lost the race; attaching to the winner:', error)
           }
         }
-        const disposeItem = registerUnifiedCard(SHARED_ITEM_SLOT)
+        const disposeItem = registerUnifiedCard()
         return () => {
           disposeItem()
           disposeContainer?.()
         }
       })
     }
-    ctx.inject(['settingsScope'], (scopeCtx: any) => {
-      try {
-        adoptQuotaScope(scopeCtx.settingsScope.bind({ namespace: QUOTA_SETTINGS_NAMESPACE }))
-      } catch (error: unknown) {
-        console.error('[dsh-qoder-connect] quota settings scope unavailable (sidebar cards stay hidden):', error)
-      }
-      registerUnifiedCard('settings.plugin.item')
-    })
-    ctx.inject(['configForms'], (scopeCtx: any) => {
-      try {
-        const forms = scopeCtx.configForms
-        adoptQuotaScope(forms.get(ENTRY_ID))
-      } catch (error: unknown) {
-        console.error('[dsh-qoder-connect] quota configuration form unavailable (sidebar cards stay hidden):', error)
-      }
-      joinSharedSettingsBlock()
-    })
+
+    // 插件自有配置（`<profile>/.dsh-qoder-connect/settings.json`）：读写走宿主半
+    // 的 settings face。镜像用 stub scope 顶替（真实实现见
+    // src/client/http-settings-scope.ts），adopt 与 joinSharedSettingsBlock
+    // 无条件进行。
+    adoptQuotaScope(stubQuotaScope)
+    joinSharedSettingsBlock()
 
     // Dashboard internals stand-ins (see the note above).
     const QUOTA_PANEL_ID = 'qoder-quota-panel'
@@ -248,23 +240,24 @@ interface FakeContext {
  * A stand-in for the DSH client context. `throwOn` names the service call that
  * must fail, which is how each test moves a different guarded boundary.
  *
- * `host` picks which configuration service exists, because exactly one of the
- * two ever does: DSH 0.1.5 serves `settingsScope` and the Plugins-tab card list,
- * DSH 0.1.7 serves `configForms` and the shared 《插件设置》 block instead. A
- * `ctx.inject` whose service is absent never calls back — that is the property
- * the entry relies on, so the stand-in reproduces it rather than handing every
- * callback a context.
+ * `containerRace` pre-registers a sibling's shared block before this plugin's
+ * factory runs, which is how the "attach to the winner" path is exercised; the
+ * mid-call race (register throws after the probe saw nothing) is driven by the
+ * test itself wrapping `ctx.slots.register`.
  */
 function fakeContext(
-  throwOn: { slot?: string; scopeBind?: boolean; containerRace?: boolean } = {},
-  host: '0.1.5' | '0.1.7' = '0.1.5',
+  throwOn: { slot?: string; containerRace?: boolean } = {},
 ): FakeContext {
   const injections: string[] = []
   const registerCalls: Record<string, unknown>[] = []
   const slots = {
     inject: (name: string, factory: () => unknown) => {
       if (throwOn.slot !== undefined && throwOn.slot === name) {
-        throw new Error(`keyed slot "${name}" requires options.key`)
+        throw new Error(`slot "${name}" requires options.key`)
+      }
+      if (throwOn.containerRace === true && name === SHARED_SECTION_SLOT) {
+        // A sibling claimed the shared block before this plugin looked.
+        registerCalls.push({ name: SHARED_SECTION_SLOT, id: SHARED_SECTION_ID })
       }
       injections.push(name)
       // The mirror's factories only run when the settings page renders; the
@@ -294,24 +287,8 @@ function fakeContext(
     locale: { register: () => () => {}, bind: () => (key: string) => key },
     slots,
     get: (name: string) => (name === 'layout' ? layout : undefined),
-    settingsScope: {
-      bind: () => {
-        if (throwOn.scopeBind === true) throw new TypeError('settingsScope.bind is not a function')
-        return { getSnapshot: () => ({ value: undefined }), subscribe: () => {} }
-      },
-    },
-    configForms: {
-      get: () => ({ getSnapshot: () => ({ value: undefined }), subscribe: () => {} }),
-    },
     inject: (deps: string[], cb: (scope: any) => void) => {
-      if (throwOn.slot !== undefined && deps.includes(throwOn.slot)) return
-      if (host === '0.1.5' && deps.includes('configForms')) return
-      if (host === '0.1.7' && deps.includes('settingsScope')) return
-      if (host === '0.1.7' && throwOn.containerRace === true && deps.includes('configForms')) {
-        // A sibling claimed the shared block before this plugin looked.
-        registerCalls.push({ name: SHARED_SECTION_SLOT, id: SHARED_SECTION_ID, options: {} })
-      }
-      cb({ get: ctx.get, slots, settingsScope: ctx.settingsScope, configForms: ctx.configForms })
+      cb({ get: ctx.get, slots })
     },
   }
   return { ctx, injections, registerCalls }
@@ -327,7 +304,7 @@ function useErrorSpy(): { errors: string[]; restore: () => void } {
 describe('client card fallback', () => {
   it('swallows a slot registration failure instead of throwing', () => {
     const { errors, restore } = useErrorSpy()
-    const { ctx } = fakeContext({ slot: 'settings.plugin.item' })
+    const { ctx } = fakeContext({ slot: SHARED_ITEM_SLOT })
 
     // Must not throw — the whole point of the fallback.
     expect(() => apply(ctx)).not.toThrow()
@@ -335,24 +312,6 @@ describe('client card fallback', () => {
     // The error is visible in the console for developers.
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain('[dsh-qoder-connect] client card failed to load')
-    expect(errors[0]).toContain('requires options.key')
-
-    restore()
-  })
-
-  it('keeps unified card registered when the quota settings scope is missing', () => {
-    const { errors, restore } = useErrorSpy()
-    const { ctx, registerCalls } = fakeContext({ scopeBind: true })
-
-    expect(() => apply(ctx)).not.toThrow()
-    // One inner catch, not the outer boundary: the cards still contribute.
-    expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain('quota settings scope unavailable')
-    expect(registerCalls.filter(call => call['key'] === 'qoder')).toHaveLength(1)
-    // The scope is handed over as undefined, so the settings card renders its
-    // toggles read-only rather than crashing on a missing service.
-    const settingsCard = registerCalls.find(call => call['key'] === 'qoder') as unknown as { inject: () => { scope: unknown } }
-    expect(settingsCard.inject().scope).toBeUndefined()
 
     restore()
   })
@@ -389,16 +348,16 @@ describe('client card fallback', () => {
 
     expect(() => apply(ctx)).not.toThrow()
     expect(errors).toEqual([])
-    expect(injections.filter(name => name === 'settings.plugin.item')).toHaveLength(1)
+    expect(injections.filter(name => name === SHARED_ITEM_SLOT)).toHaveLength(1)
     expect(injections).toContain('main')
     expect(injections).toContain('sidebar.footer.action')
     expect(injections).toContain('conversation.input.right')
 
     // The seats this plugin claims, by their Qoder keys and ids.
     const pluginKeys = registerCalls.flatMap(call => typeof call['key'] === 'string' ? [call['key']] : [])
-    expect(pluginKeys.sort()).toEqual(['qoder', 'qoder-quota-panel'])
+    expect(pluginKeys.sort()).toEqual(['qoder-quota-panel'])
     const seatIds = registerCalls.flatMap(call => typeof call['id'] === 'string' ? [call['id']] : [])
-    expect(seatIds.sort()).toEqual(['qoder-global-quota', 'qoder-probe', 'qoder-quota'])
+    expect(seatIds.sort()).toEqual(['dsh-qoder-connect', 'plugin-settings', 'qoder-global-quota', 'qoder-probe', 'qoder-quota'])
     // The probe seat belongs to the international-or-not composer chrome this
     // plugin owns; its route pair is what the control reads.
     expect(QODER_PROBE_PATH).toBe('/plugins/dsh-qoder-connect/probe')
@@ -406,30 +365,12 @@ describe('client card fallback', () => {
     restore()
   })
 
-  it('0.1.5 never touches the shared settings block', () => {
+  it('builds the shared settings block and homes the card in it', () => {
     const { errors, restore } = useErrorSpy()
     const { ctx, injections, registerCalls } = fakeContext()
 
     expect(() => apply(ctx)).not.toThrow()
     expect(errors).toEqual([])
-    // The old host keeps exactly the layout it had: its Plugins tab, and no
-    // container of ours — three plugins building one on 0.1.5 would leave a
-    // block showing only whoever won the race.
-    expect(injections).not.toContain(SHARED_SECTION_SLOT)
-    expect(injections).not.toContain(SHARED_ITEM_SLOT)
-    expect(registerCalls.some(call => call['id'] === SHARED_SECTION_ID)).toBe(false)
-
-    restore()
-  })
-
-  it('0.1.7 builds the shared settings block and homes the card in it', () => {
-    const { errors, restore } = useErrorSpy()
-    const { ctx, injections, registerCalls } = fakeContext({}, '0.1.7')
-
-    expect(() => apply(ctx)).not.toThrow()
-    expect(errors).toEqual([])
-    // The removed Plugins-tab slot is not claimed on this host.
-    expect(injections).not.toContain('settings.plugin.item')
     expect(injections).toContain(SHARED_SECTION_SLOT)
     expect(injections).toContain(SHARED_ITEM_SLOT)
 
@@ -449,9 +390,9 @@ describe('client card fallback', () => {
     restore()
   })
 
-  it('0.1.7 attaches to a block a sibling already built', () => {
+  it('attaches to a block a sibling already built', () => {
     const { errors, restore } = useErrorSpy()
-    const { ctx, registerCalls } = fakeContext({ containerRace: true }, '0.1.7')
+    const { ctx, registerCalls } = fakeContext({ containerRace: true })
 
     expect(() => apply(ctx)).not.toThrow()
     expect(errors).toEqual([])
@@ -462,9 +403,9 @@ describe('client card fallback', () => {
     restore()
   })
 
-  it('0.1.7 falls back to attaching when the container race is lost mid-call', () => {
+  it('falls back to attaching when the container race is lost mid-call', () => {
     const { errors, restore } = useErrorSpy()
-    const { ctx, registerCalls } = fakeContext({}, '0.1.7')
+    const { ctx, registerCalls } = fakeContext()
     // The probe sees no container, then a sibling's lands first: the register
     // call throws and the backoff has to attach to theirs instead.
     const first = true
@@ -494,11 +435,10 @@ describe('mirror stays verbatim with src/client/index.tsx', () => {
 
   it('every console.error message in the entry is mirrored word for word', () => {
     const messages = [...entrySource.matchAll(/console\.error\(\s*'([^']+)'/g)].map(match => match[1]!)
-    // Guard the guard: the real entry must actually carry the seven boundaries
-    // this spec mirrors (outer catch + six inner catches: the two configuration
-    // services, the lost container race, the dashboard, the sidebar footer, and
-    // the panel close).
-    expect(messages).toHaveLength(7)
+    // Guard the guard: the real entry must actually carry the five boundaries
+    // this spec mirrors (outer catch + the lost container race, the dashboard,
+    // the sidebar footer, and the panel close).
+    expect(messages).toHaveLength(5)
     for (const message of messages) {
       expect(mirrorSource).toContain(message)
     }
@@ -527,9 +467,9 @@ describe('mirror stays verbatim with src/client/index.tsx', () => {
     // contributes. A rename on one side and not the other is exactly the drift
     // the mirror obligation warns about.
     const seats = [
-      'settings.plugin.item', 'conversation.input.right', 'sidebar.footer.action',
+      'conversation.input.right', 'sidebar.footer.action',
       'qoder-global-quota', 'qoder-quota-panel', 'qoder-probe',
-      // The 0.1.7 shared 《插件设置》 block: the container and the child slot the
+      // The shared 《插件设置》 block: the container and the child slot the
       // three connect plugins must spell identically.
       'settings.section', 'plugin-settings', 'plugin-settings.item',
     ]

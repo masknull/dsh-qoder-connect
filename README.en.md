@@ -64,6 +64,8 @@ Each variant card's *Context window* tab lists capacities per model under the *�
 
 Both variant cards provide a *Model Toggles* tab (located between *Context window* and *Credit details*): search models on the fly, toggle individual models on or off, and use *Enable all* / *Disable all* batch buttons; hidden models will not appear in the session model picker.
 
+![Model toggles & batch controls](assets/8.png)
+
 ### Daily Auto Check-In & Check-In Log
 
 Enable daily automatic check-in in the settings card and set each variant's own moment (10:00 UTC+8 by default), then inspect check-in history logs, trigger a manual check-in, or clear logs in the *Check-in log* tab:
@@ -74,18 +76,29 @@ Enable daily automatic check-in in the settings card and set each variant's own 
 
 Prerequisites:
 
-- DSH core `0.1.5-rc.1` or newer (this plugin peers on the `@deepseek-ai/*` `^0.1.5-rc.1` line);
+- DSH core `0.1.7-rc.1` or newer (this plugin peers on the `@deepseek-ai/*` `>=0.1.7-rc.1` line);
 - Node.js `^22.19.0 || >=24.0.0` (per `package.json` engines);
 - your own Qoder account and at least one Personal Access Token.
 
 ```sh
 # From GitHub (recommended)
 dsh plugin --profile web add github:masknull/dsh-qoder-connect
-# Or from npm, once published
+# Or from npm
 dsh plugin --profile web add dsh-qoder-connect
 ```
 
 Swap the `--profile` value for the profile you use (`web` / `desktop` / `tui`, e.g. `dsh plugin --profile desktop add dsh-qoder-connect`) — data stays inside that profile, so web / desktop / tui never collide. On a terminal-only profile (TUI) there is no browser card: manage the PAT and check status through the bundled CLI instead; the settings card and sidebar widgets require Web or Desktop.
+
+> **DSH older than `0.1.7-rc.1`?** Use **[v0.2.0](https://github.com/masknull/dsh-qoder-connect/releases/tag/v0.2.0)** instead — the last release supporting the 0.1.5 line (DSH ≥ `0.1.5-rc.2`):
+>
+> ```sh
+> # From GitHub (recommended, pin the tag)
+> dsh plugin --profile web add github:masknull/dsh-qoder-connect#v0.2.0
+> # Or from npm
+> dsh plugin --profile web add dsh-qoder-connect@0.2.0
+> ```
+>
+> Upgrading from 0.1.5? This release removed the automatic migration of the old host's `settings.yaml`. To carry your old configuration over, migrate through **[v0.1.9](https://github.com/masknull/dsh-qoder-connect/releases/tag/v0.1.9)** (the first release with the data migration) first, then upgrade to this release.
 
 ## Configuration
 
@@ -98,7 +111,7 @@ Swap the `--profile` value for the profile you use (`web` / `desktop` / `tui`, e
 
 ### Save it on the card
 
-DSH → Settings → Plugins → the variant's card: paste the PAT into the password field and press *Save* (*“Validating and saving…”* while it runs). The token is validated against that variant's region first — a refusal saves nothing and the card says *“That PAT was rejected — generate a new one in your account settings and try again.”*. Do this on both cards to run both groups side by side.
+DSH → Settings → Plugin Settings (插件设置) → the Qoder card: paste the PAT into the password field and press *Save* (*“Validating and saving…”* while it runs). The token is validated against that variant's region first — a refusal saves nothing and the card says *“That PAT was rejected — generate a new one in your account settings and try again.”*. Do this on both cards to run both groups side by side.
 
 ### Environment-variable fallback
 

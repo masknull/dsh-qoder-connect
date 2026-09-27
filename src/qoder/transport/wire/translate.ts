@@ -2,6 +2,7 @@
 
 import type { ContentBlock, ImageBlock, Message, ToolResultBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
+import { requestImageDimensions } from '@deepseek-ai/dsh-attachment'
 import { QoderLlmError } from '../../errors.ts'
 import type { CosyCredentials } from './cosy.ts'
 import type {
@@ -111,11 +112,26 @@ async function resolveImagePart(
   }
   let image: RequestImageAttachment
   try {
-    const limits = attachments.imageLimits
+    // DSH ≥ 0.1.6-alpha.1 replaced the image-request policy `{maxPixels,
+    // maxBytes}` with an explicit target `{width, height, maxBytes}`
+    // (ImageRequestPolicy → ImageRequestTarget in @deepseek-ai/dsh-attachment):
+    // the host now expects the caller to project the pixel budget into exact
+    // dimensions with its own requestImageDimensions helper. Passing the
+    // retired maxPixels field fails `validateTarget`'s checkedInteger on
+    // width/height, which surfaces as a 400 "could not prepare an image
+    // attachment" for every image. This bundle still compiles against the
+    // 0.1.5 typings, so the new target is asserted at this single call site.
+    const { width: sourceWidth, height: sourceHeight } = block.attachment
+    const projected = requestImageDimensions(
+      sourceWidth,
+      sourceHeight,
+      attachments.imageLimits.maxImagePixels,
+    )
     image = await attachments.readImageRequest(block.attachment, {
-      maxPixels: limits.maxImagePixels,
-      maxBytes: limits.maxImageBytes,
-    }, signal)
+      width: projected.width,
+      height: projected.height,
+      maxBytes: attachments.imageLimits.maxImageBytes,
+    } as unknown as Parameters<QoderImageAttachments['readImageRequest']>[1], signal)
   } catch (error) {
     if (signal?.aborted) throw new QoderLlmError('Qoder image preparation was aborted.', 'ABORTED', { cause: error })
     if (error instanceof QoderLlmError) throw error

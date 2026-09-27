@@ -64,6 +64,8 @@
 
 两张变体卡片均提供「模型开关」页（位于「上下文窗口」与「额度明细」之间）：支持即时搜索模型、单独开启/关闭指定模型，以及全选后一键「批量开启」或「批量关闭」；关闭的模型不会出现在模型选择器中。
 
+![模型开关与批量控制](assets/8.png)
+
 ### 每日自动签到与签到日志
 
 支持在设置卡片中开启每日自动签到，并自定义各版本的签到时刻（默认 10:00，按 UTC+8）；在卡片底部的「签到日志」面板中查看签到流水、立即签到或清空日志：
@@ -74,18 +76,29 @@
 
 前置条件：
 
-- DSH 核心 `0.1.5-rc.1` 及以上（本插件 peer 依赖 `@deepseek-ai/*` `^0.1.5-rc.1` 线）；
+- DSH 核心 `0.1.7-rc.1` 及以上（本插件 peer 依赖 `@deepseek-ai/*` `>=0.1.7-rc.1` 线）；
 - Node.js `^22.19.0 || >=24.0.0`（`package.json` engines）；
 - 你自己的 Qoder 账号，以及至少一枚个人访问令牌。
 
 ```sh
 # 从 GitHub 安装（推荐）
 dsh plugin --profile web add github:masknull/dsh-qoder-connect
-# 或已发布 npm 后从 npm 安装
+# 或从 npm 安装
 dsh plugin --profile web add dsh-qoder-connect
 ```
 
 按你使用的 profile 换 `--profile` 的值（`web` / `desktop` / `tui`，如 `dsh plugin --profile desktop add dsh-qoder-connect`）。装到哪个 profile，数据就落在哪个 profile 目录里，web / desktop / tui 各自独立。没有浏览器卡片的终端环境（TUI）下依旧可用 CLI 保存 PAT 并驱动模型；设置卡片与侧栏额度卡需要 Web/Desktop 界面。
+
+> **DSH 低于 `0.1.7-rc.1`？** 请改用最后一个支持 0.1.5 线的版本 **[v0.2.0](https://github.com/masknull/dsh-qoder-connect/releases/tag/v0.2.0)**（要求 DSH ≥ `0.1.5-rc.2`）：
+>
+> ```sh
+> # GitHub（推荐，指定 tag）
+> dsh plugin --profile web add github:masknull/dsh-qoder-connect#v0.2.0
+> # 或从 npm 安装
+> dsh plugin --profile web add dsh-qoder-connect@0.2.0
+> ```
+>
+> 从 0.1.5 升级上来的老用户：本版本已移除旧宿主 `settings.yaml` 的自动迁移；如需保留旧配置，请先经 **[v0.1.9](https://github.com/masknull/dsh-qoder-connect/releases/tag/v0.1.9)**（首个带数据迁移的版本）完成迁移后，再升级本版本。
 
 ## 配置与使用
 
@@ -98,7 +111,7 @@ dsh plugin --profile web add dsh-qoder-connect
 
 ### 在卡片上保存
 
-DSH → 设置 → 插件 → 对应卡片，展开后把 PAT 粘贴进密码输入框，点「保存」（期间显示「校验并保存中…」）。保存动作会先经 Qoder 校验令牌对该变体的区域有效，失败则不落盘并提示「PAT 无效或已过期 — 请到账号设置重新生成后再试。」两版各填各的卡片即可两组并存。
+DSH → 设置 → 插件设置 → Qoder 卡片，展开后把 PAT 粘贴进密码输入框，点「保存」（期间显示「校验并保存中…」）。保存动作会先经 Qoder 校验令牌对该变体的区域有效，失败则不落盘并提示「PAT 无效或已过期 — 请到账号设置重新生成后再试。」两版各填各的卡片即可两组并存。
 
 ### 环境变量兜底
 
@@ -119,13 +132,13 @@ DSH → 设置 → 插件 → 对应卡片，展开后把 PAT 粘贴进密码输
 
 ```text
 <profile>/.dsh-qoder-connect/
-├── .qoder-auth.json              # 中国版 PAT（{version:2, pat, region, savedAt}）
+├── .qoder-auth.json              # 国内版 PAT（{version:2, pat, region, savedAt}）
 ├── .qoder-global-auth.json       # 国际版 PAT
 ├── checkin-status.json           # 签到状态与历史日志记录
 └── state/
-    ├── .qoder-catalog.json       # 中国版按账号保存的模型目录
+    ├── .qoder-catalog.json       # 国内版按账号保存的模型目录
     ├── .qoder-global-catalog.json
-    ├── .qoder-probe.json         # 中国版推理档位探测记录
+    ├── .qoder-probe.json         # 国内版推理档位探测记录
     ├── .qoder-global-probe.json
     ├── .qoder-host-heartbeat.json    # host 心跳（doctor 判断宿主是否在跑）
     └── .qoder-machine-id         # 传输层机器标识种子（不落 ~/.qoder）

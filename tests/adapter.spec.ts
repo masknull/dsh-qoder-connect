@@ -121,9 +121,9 @@ describe('Qoder adapter model descriptors', () => {
     // The rate rides the *name*: middle dot + normalized `x<n>` multiplier.
     expect(byId.get('rated')).toBe('Rated · x1.8')
     expect(byId.get('free')).toBe('Free · x0')
-    // No rate material means no suffix — and a model missing from the
-    // catalog falls through untouched.
-    expect(byId.get('unknown')).toBe('Unknown')
+    // A rate the plugin cannot stand behind renders as words, not an empty
+    // slot; a model missing from the catalog falls through untouched.
+    expect(byId.get('unknown')).toBe('Unknown · 价格暂不可用')
     expect(byId.get('plain')).toBe('Plain')
     // Every listed row reports the adapter's own provider route.
     expect(listed.every(model => model.provider === QODER_PROVIDER)).toBe(true)

@@ -2,10 +2,10 @@ import z from "@deepseek-ai/schemastery";
 import "@earendil-works/pi-ai";
 import { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
+import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { SettingsNamespace } from "@deepseek-ai/dsh-settings";
-import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 //#region src/paths.d.ts
 /**
  * The plugin's data directory — the ONE place every file the plugin owns
@@ -1448,16 +1448,14 @@ declare const QUOTA_POLL_DEFAULT_MS = 300000;
 declare const QUOTA_POLL_MIN_MS = 60000;
 declare const Config: z<Config>;
 /**
- * Every field each settings section owns, and therefore every field the live
- * configuration has to carry through.
+ * The field groups the configuration is merged from, one list per card.
  *
- * One list per section, shared by the merge and by the test that pins it to
- * the schema. Writing the merge out by hand is what broke auto check-in: the
- * `qoder-quota` section grew four fields (`autoCheckInCN`, `autoCheckInGlobal`,
- * `checkInMinuteCN`, `checkInMinuteGlobal`) while the merge kept copying only
- * the three that predated them, so `current().autoCheckInCN` read `undefined`
- * forever and the scheduler saw the toggle as permanently off. The card saved
- * it, the file held it, and nothing ever acted on it.
+ * Writing the merge out by hand is what broke auto check-in: the quota group
+ * grew four fields (`autoCheckInCN`, `autoCheckInGlobal`, `checkInMinuteCN`,
+ * `checkInMinuteGlobal`) while the merge kept copying only the three that
+ * predated them, so `current().autoCheckInCN` read `undefined` forever and the
+ * scheduler saw the toggle as permanently off. The card saved it, the file
+ * held it, and nothing ever acted on it.
  */
 declare const CN_SECTION_KEYS: readonly ["probeConsent", "useMaximumContextWindowCN", "modelContextWindowsCN", "disabledModelsCN"];
 declare const GLOBAL_SECTION_KEYS: readonly ["useMaximumContextWindow", "modelContextWindows", "disabledModels"];

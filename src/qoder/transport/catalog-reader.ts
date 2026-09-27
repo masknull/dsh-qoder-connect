@@ -38,7 +38,16 @@ export async function fetchQoderModels(
   try {
     const response = await fetchImpl(url, {
       method: 'GET',
-      headers: { accept: 'application/json', ...buildAuthHeaders(null, url, credentials) },
+      // `identity` keeps a host that does not decompress (the Electron desktop
+      // host's fetch) from handing us a gzip byte stream that then fails
+      // JSON.parse — the chat request in chat.ts declares it for the same
+      // reason. readLimitedText additionally decodes a compressed body when a
+      // proxy or middlebox ignores the header.
+      headers: {
+        accept: 'application/json',
+        'accept-encoding': 'identity',
+        ...buildAuthHeaders(null, url, credentials),
+      },
       signal: deadline.signal,
     })
     options.logger?.debug?.('[Qoder Models] Catalog request completed', {

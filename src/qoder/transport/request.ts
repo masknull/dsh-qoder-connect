@@ -1,6 +1,7 @@
 /** Internal request lifecycle primitives for the Qoder transport. */
 
 import { createHash } from 'node:crypto'
+import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import { logParsedResponse, redactLogPayload, type QoderLogger } from './logging.ts'
 import { defaultUserAgent, qoderClientType } from './wire/cosy.ts'
@@ -77,9 +78,8 @@ export async function readLimitedText(
   if (!response.body) return ''
 
   const reader = response.body.getReader()
-  const decoder = new TextDecoder()
+  const chunks: Uint8Array[] = []
   let bytes = 0
-  let text = ''
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -88,13 +88,38 @@ export async function readLimitedText(
       if (bytes > maxBytes) {
         throw new QoderLlmError(`${label} exceeded its response size limit.`, 'MALFORMED_RESPONSE')
       }
-      text += decoder.decode(value, { stream: true })
+      chunks.push(value)
     }
-    return text + decoder.decode()
   } finally {
     await reader.cancel().catch(() => undefined)
     reader.releaseLock()
   }
+
+  // Decode at the byte level: a host fetch whose stack does not decompress
+  // (the Electron desktop host) yields the compressed stream verbatim, and a
+  // TextDecoder pass would destroy those bytes irreversibly. The encoding is
+  // taken from the response header; when that is missing too, the gzip magic
+  // number is the fallback signal.
+  let payload = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+  const encoding = (response.headers.get('content-encoding') ?? '').toLowerCase()
+  const looksGzipped = payload.length >= 2 && payload[0] === 0x1f && payload[1] === 0x8b
+  if (encoding !== '' || looksGzipped) {
+    try {
+      if (encoding.includes('gzip') || (encoding === '' && looksGzipped)) {
+        payload = gunzipSync(payload)
+      } else if (encoding.includes('br')) {
+        payload = brotliDecompressSync(payload)
+      } else if (encoding.includes('deflate')) {
+        payload = inflateSync(payload)
+      }
+    } catch {
+      throw new QoderLlmError(`${label} arrived compressed but could not be decompressed.`, 'MALFORMED_RESPONSE')
+    }
+    if (payload.byteLength > maxBytes) {
+      throw new QoderLlmError(`${label} exceeded its response size limit.`, 'MALFORMED_RESPONSE')
+    }
+  }
+  return new TextDecoder().decode(payload)
 }
 
 interface Flight<T> {
@@ -186,6 +211,11 @@ export async function openApiJsonRequest<T>(
   try {
     const headers: Record<string, string> = {
       accept: 'application/json',
+      // Keep the upstream from compressing: the Electron desktop host's fetch
+      // does not decompress the body, and a compressed stream would reach the
+      // JSON parser as binary noise. `identity` states the preference
+      // explicitly; readLimitedText decompresses as a fallback.
+      'accept-encoding': 'identity',
       'user-agent': options.userAgent ?? defaultUserAgent,
       'cosy-version': '1.0.1',
       'cosy-clienttype': qoderClientType,

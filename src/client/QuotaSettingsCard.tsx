@@ -86,7 +86,7 @@ export interface QuotaSettingsCardInjected {
   scope?: QuotaSettingsScope<QuotaSection> | undefined
 }
 
-/** The section this card edits (mirrors the host-side QUOTA_SECTION). */
+/** The fields this card edits (mirrors the host-side QUOTA_SECTION_KEYS). */
 export interface QuotaSection {
   sidebarQuotaCN?: boolean
   sidebarQuotaGlobal?: boolean

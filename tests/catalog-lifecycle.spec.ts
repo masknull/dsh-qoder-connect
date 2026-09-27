@@ -2,16 +2,31 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SettingsProvider from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import * as Qoder from '../src/index.ts'
 import { QoderCredentialStore, qoderCredentialIdentity } from '../src/auth.ts'
 import { fingerprintModel } from '../src/probe-store.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
 import { modelInfoOf } from '../src/upstream.ts'
+
+/**
+ * The plugin module, re-imported per case.
+ *
+ * `src/index.ts` keeps module-level per-identity records (`lastIdentities`,
+ * `lastLiveFetchAt`) that exist so a restart of the SAME account — a 0.1.7
+ * settings-write fiber reload — neither re-fetches what was just fetched nor
+ * clears the records that account owns. Every case here boots a FRESH temp
+ * root, so a previous case's recorded identity would otherwise read as an
+ * account switch on the next boot: the saved catalog is deleted, probe
+ * observations are cleared, and the roster falls back. Re-importing the module
+ * gives each case a clean set of records while `auth`/`catalog`/`probe-store`
+ * (stateless) stay on their static imports.
+ */
+let Qoder: typeof import('../src/index.ts')
+let QoderAuth: typeof import('../src/auth.ts')
 
 /**
  * Catalog lifecycle: what happens across a credential change and a failed fetch.
@@ -43,6 +58,12 @@ class MemorySettings extends SettingsProvider {
 
 const CLEANUP: (() => Promise<void>)[] = []
 let context: Context | undefined
+
+beforeEach(async () => {
+  vi.resetModules()
+  Qoder = await import('../src/index.ts')
+  QoderAuth = await import('../src/auth.ts')
+})
 
 afterEach(async () => {
   await context?.fiber.dispose()
@@ -633,9 +654,13 @@ describe('identity changes during catalog loading', () => {
       noteList: () => {},
     }))
 
-    const resolve = QoderCredentialStore.prototype.resolve
+    // Spy on the freshly imported module's class: `vi.resetModules()` (above)
+    // re-evaluates the plugin's module tree per case, so the prototype the
+    // running plugin uses is the one this import hands back, not the static
+    // reference the file header carries for its stateless helpers.
+    const resolve = QoderAuth.QoderCredentialStore.prototype.resolve
     let switched = false
-    vi.spyOn(QoderCredentialStore.prototype, 'resolve').mockImplementation(async function (this: QoderCredentialStore) {
+    vi.spyOn(QoderAuth.QoderCredentialStore.prototype, 'resolve').mockImplementation(async function (this: InstanceType<typeof QoderAuth.QoderCredentialStore>) {
       if (!switched) {
         switched = true
         await writeFile(cnPath, credentialDocument(PAT_B))

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import * as Qoder from '../src/index.ts'
@@ -12,7 +12,7 @@ import { modelInfoOf } from '../src/upstream.ts'
 /**
  * End-to-end tests for the observation/declaration merge, driven through the
  * real LLM seam rather than an internal helper
- * (`docs/reasoning-effort-probe-plan.md` §5).
+ * (`docs/reasoning-effort-probe-plan.md` 搂5).
  *
  * What must hold:
  * - with no observation, an undeclared model still exposes no control (the
@@ -25,15 +25,39 @@ import { modelInfoOf } from '../src/upstream.ts'
 
 const CLEANUP: string[] = []
 
+beforeAll(async () => {
+  root = await mkdtemp(join(tmpdir(), 'dsh-qoder-probe-'))
+  CLEANUP.push(root)
+})
+
 afterEach(async () => {
-  for (const path of CLEANUP.splice(0)) await rm(path, { recursive: true, force: true })
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+})
+
+afterAll(async () => {
+  for (const path of CLEANUP.splice(0)) await rm(path, { recursive: true, force: true })
 })
 
 /** The PAT these fixtures sign in as; records must carry its hashed identity. */
 const PAT = 'pt-merge-0000000000000000000000mm'
 const ACCOUNT = Qoder.qoderCredentialIdentity({ pat: PAT })
+
+/**
+ * The one temporary root every boot in this spec shares.
+ *
+ * The plugin keeps module-level per-identity records (`lastIdentities`,
+ * `lastLiveFetchAt`) and a file-backed saved catalog, all designed so a
+ * restart of the SAME account — a 0.1.7 settings-write fiber reload — neither
+ * re-fetches what was just fetched nor drops the records the account owns.
+ * A fresh root or a fresh PAT per boot would instead read as an account
+ * switch: the saved catalog could not be read from the new root, the startup
+ * fetch would be re-issued (or skipped without the file to fall back on), and
+ * every observation would be cleared by `adoptIdentity`. Each case therefore
+ * boots the same account in the same root, which is the sequence the module
+ * state exists to serve.
+ */
+let root: string
 
 /** Undeclared but reasoning-capable: the merge target. */
 const UNDECLARED_ID = 'probe-me'
@@ -97,11 +121,8 @@ function credentialDocument(): string {
  */
 async function boot(options: {
   model?: string
-  account?: string
   record?: (fingerprint: string) => Qoder.QoderProbeRecord
 }): Promise<Context> {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-qoder-probe-'))
-  CLEANUP.push(root)
   vi.stubEnv('DSH_HOME', root)
   // The plugin keeps its files under its own data directory; point that at the
   // same temporary root so the credential below is the one the store reads.

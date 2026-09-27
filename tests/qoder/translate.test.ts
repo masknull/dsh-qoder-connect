@@ -55,7 +55,7 @@ test('request preserves the discovered default tier and does not send ambiguous 
   }
 })
 
-function imageAttachments(onRead?: () => void): QoderImageAttachments {
+function imageAttachments(onRead?: (target: unknown) => void): QoderImageAttachments {
   return {
     imageLimits: {
       maxImageBytes: 5 * 1024 * 1024,
@@ -65,8 +65,8 @@ function imageAttachments(onRead?: () => void): QoderImageAttachments {
       maxImageDimension: 2_000,
       mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
     },
-    async readImageRequest(attachment) {
-      onRead?.()
+    async readImageRequest(attachment, target) {
+      onRead?.(target)
       return {
         variantId: 'sha256:variant-1' as never,
         attachment,
@@ -223,6 +223,35 @@ test('validateAndTranslateMessages inlines user images as ordered OpenAI data UR
       { type: 'text', text: 'after' },
     ],
   }])
+})
+
+test('image requests pass the DSH >= 0.1.6-alpha.1 width/height/maxBytes target', async () => {
+  // Regression: the retired {maxPixels, maxBytes} policy fails validateTarget's
+  // checkedInteger(width) on the new host and surfaces as "could not prepare
+  // an image attachment" for every image.
+  let seen: unknown
+  const message = createUserMessage({
+    content: [{ type: 'image', attachment: imageRef }],
+    source: { kind: 'user' },
+  })
+  await validateAndTranslateMessages([message], undefined, imageAttachments(target => { seen = target }))
+  assert.deepEqual(seen, { width: 1, height: 1, maxBytes: 5 * 1024 * 1024 })
+})
+
+test('image target projects the pixel budget into aspect-preserving dimensions', async () => {
+  // 4000x3000 = 12M pixels against the 4M budget: scale = sqrt(4M/12M).
+  const bigRef = { ...imageRef, width: 4000, height: 3000 }
+  let seen: { width: number; height: number; maxBytes: number } | undefined
+  const message = createUserMessage({
+    content: [{ type: 'image', attachment: bigRef }],
+    source: { kind: 'user' },
+  })
+  const attachments = imageAttachments(target => { seen = target as never })
+  attachments.imageLimits = { ...attachments.imageLimits, maxImagePixels: 4_000_000 }
+  await validateAndTranslateMessages([message], undefined, attachments)
+  assert.ok(seen !== undefined)
+  assert.deepEqual(seen, { width: 2309, height: 1732, maxBytes: 5 * 1024 * 1024 })
+  assert.ok(seen.width * seen.height <= 4_000_000)
 })
 
 test('validateAndTranslateMessages forwards tool-result images in a following user message', async () => {

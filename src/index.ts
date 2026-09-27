@@ -37,7 +37,7 @@ import type { QoderWebCatalog, QoderWebProbeSection } from './status-paths.ts'
 import { QODER_SETTINGS_FACE_PATH } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { emitJobTokenHint, emitJobTokenRefreshFailedHint, installJobTokenHint } from './job-token-hint.ts'
-import { SettingsStore, readLegacySections } from './settings-store.ts'
+import { SettingsStore } from './settings-store.ts'
 import { QODER_CONNECT_VERSION } from './version.ts'
 import { CHINA_VARIANT, GLOBAL_VARIANT, QODER_VARIANTS, type QoderVariant } from './variants.ts'
 
@@ -402,9 +402,7 @@ export const Config: z<Config> = z.object({
   // projects an entry's settings form from this schema (its `describe()` reads
   // `entry.fiber.runtime.Config`), so a field that is not declared here reaches
   // neither the settings document nor the Models page's provider directory —
-  // which is exactly how "设置-模型 里看不到模型开关" happened. They used to
-  // live only in the 0.1.5 per-card sections (CHINA_SECTION/GLOBAL_SECTION),
-  // which 0.1.7 has no concept of.
+  // which is exactly how "设置-模型 里看不到模型开关" happened.
   disabledModels: DISABLED_MODELS_FIELD,
   disabledModelsCN: DISABLED_MODELS_FIELD,
   sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
@@ -417,56 +415,14 @@ export const Config: z<Config> = z.object({
 })
 
 /**
- * The China card's settings section: only the fields that card edits.
+ * The field groups the configuration is merged from, one list per card.
  *
- * A section is what makes its namespace "served", which is what the Plugins
- * tab dispatches a card by — so the schema and the card must stay split the
- * same way. `probeConsent` lives here because it predates the second variant;
- * it gates no current code path (only manual, per-click-confirmed probes run),
- * so it is left where existing users set it rather than moved and re-asked.
- */
-const CHINA_SECTION: z<Config> = z.object({
-  probeConsent: PROBE_CONSENT_FIELD,
-  useMaximumContextWindowCN: MAXIMUM_CONTEXT_WINDOW_CN_FIELD,
-  modelContextWindowsCN: MODEL_CONTEXT_WINDOWS_FIELD,
-  disabledModelsCN: DISABLED_MODELS_FIELD,
-})
-
-/** The global card's settings section and its context-window preferences. */
-const GLOBAL_SECTION: z<Config> = z.object({
-  useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
-  modelContextWindows: MODEL_CONTEXT_WINDOWS_FIELD,
-  disabledModels: DISABLED_MODELS_FIELD,
-})
-
-/**
- * The shared quota card's section: both sidebar toggles and the poll interval.
- *
- * Only these fields — the card edits nothing else, and the Plugins tab pairs a
- * card with the section whose namespace it names, so a stray field here would
- * render as a control no other surface reads.
- */
-const QUOTA_SECTION: z<Config> = z.object({
-  sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
-  sidebarQuotaGlobal: QUOTA_TOGGLE_FIELD,
-  autoCheckInCN: AUTO_CHECK_IN_FIELD,
-  autoCheckInGlobal: AUTO_CHECK_IN_FIELD,
-  checkInMinuteCN: CHECK_IN_MINUTE_FIELD,
-  checkInMinuteGlobal: CHECK_IN_MINUTE_FIELD,
-  quotaPollMs: QUOTA_POLL_FIELD,
-})
-
-/**
- * Every field each settings section owns, and therefore every field the live
- * configuration has to carry through.
- *
- * One list per section, shared by the merge and by the test that pins it to
- * the schema. Writing the merge out by hand is what broke auto check-in: the
- * `qoder-quota` section grew four fields (`autoCheckInCN`, `autoCheckInGlobal`,
- * `checkInMinuteCN`, `checkInMinuteGlobal`) while the merge kept copying only
- * the three that predated them, so `current().autoCheckInCN` read `undefined`
- * forever and the scheduler saw the toggle as permanently off. The card saved
- * it, the file held it, and nothing ever acted on it.
+ * Writing the merge out by hand is what broke auto check-in: the quota group
+ * grew four fields (`autoCheckInCN`, `autoCheckInGlobal`, `checkInMinuteCN`,
+ * `checkInMinuteGlobal`) while the merge kept copying only the three that
+ * predated them, so `current().autoCheckInCN` read `undefined` forever and the
+ * scheduler saw the toggle as permanently off. The card saved it, the file
+ * held it, and nothing ever acted on it.
  */
 export const CN_SECTION_KEYS = [
   'probeConsent',
@@ -608,11 +564,6 @@ interface CatalogFetch {
 
 /** Stable identity key used by credentials, probe records, and catalog entries. */
 const credentialIdentity = qoderCredentialIdentity
-
-/** The settings namespace a variant's card and provider directory entry use. */
-function settingsNamespaceFor(variant: QoderVariant): SettingsNamespace {
-  return variant.id === CHINA_VARIANT.id ? QODER_SETTINGS_NS : QODER_GLOBAL_SETTINGS_NS
-}
 
 /**
  * The static catalog a variant serves before its first successful fetch.
@@ -912,28 +863,14 @@ async function startVariant(ctx: Context, runtime: VariantRuntime, seedCatalog: 
     try {
       releaseAdapter = ctx.llm.registerAdapter([variant.id], qoder.adapter)
       // The settings namespace the Models page resolves this directory row
-      // against differs by host line, and the difference is not cosmetic:
-      //
-      //  - 0.1.7 serves one settings form per profile ENTRY, keyed by
-      //    `entry.options.id` (dsh-settings `describe()`), so the row must name
-      //    that id — naming the 0.1.5 namespace (`qoder` / `qoder-global`) makes
-      //    the page resolve a name the Host never served, and the row renders
-      //    with no configuration at all.
-      //  - 0.1.5 serves the namespaces this plugin installs, which is what
-      //    `settingsNamespaceFor` returns.
-      //
-      // `configEditor` exists only on 0.1.7, which is the same probe the write
-      // path and the migration use.
-      const host017 = ((): boolean => {
-        try {
-          const probe = ctx as unknown as { get?: (name: string) => unknown }
-          return probe.get?.('configEditor') !== undefined
-        } catch {
-          return false
-        }
-      })()
+      // against: 0.1.7 serves one settings form per profile ENTRY, keyed by
+      // `entry.options.id` (dsh-settings `describe()`), so the row must name
+      // that id. A profile that composes this bundle without an explicit id
+      // falls back to the package name, which is not a served name — the row
+      // then renders with no configuration, so `variant.id` (this provider's
+      // own id) is the last-resort key rather than a wrong one.
       const entryId = (ctx as unknown as { fiber?: { entry?: { options?: { id?: string } } } }).fiber?.entry?.options?.id
-      const settingsNs = host017 && entryId !== undefined ? (entryId as SettingsNamespace) : settingsNamespaceFor(variant)
+      const settingsNs = (entryId ?? variant.id) as SettingsNamespace
       releaseDirectory = ctx.llm.registerConfigurableProviders([{
         provider: variant.id,
         displayName: variant.displayName,
@@ -1181,41 +1118,19 @@ function validateSettingsPatch(patch: Record<string, unknown>): string | undefin
 }
 
 /**
- * When the profile tree last recomposed, module-level so every apply sees it.
- *
- * The legacy settings.yaml import writes the profile patch one section at a
- * time for seconds after the Loader settles, emitting this event on every
- * write. Cleaning up our row in that window is futile — the import's next
- * section simply writes it back — so the cleanup waits for the tree to fall
- * quiet first.
- */
-let lastConfigReloadAt = Date.now()
-
-/** Wait until the profile tree has been quiet (the legacy import finished). */
-async function waitForProfileQuiet(): Promise<void> {
-  const deadline = Date.now() + 120_000
-  for (;;) {
-    if (Date.now() - lastConfigReloadAt >= 5_000) return
-    if (Date.now() >= deadline) return
-    await new Promise(resolve => setTimeout(resolve, 1_000))
-  }
-}
-
-/**
  * Delete this plugin's own fields from the profile entry config, leaving every
  * other key of the row untouched.
  *
  * One-time, right after the settings file has been seeded: the entry returns to
- * its shipped state, so no second source of truth remains. Both write APIs are
- * probed — `configEditor` (0.1.7) first, then the settings service's namespace
- * `replace` (0.1.5), which rebuilds each of this plugin's three sections from
- * the foreign keys alone.
+ * its shipped state, so no second source of truth remains. The write rides
+ * `configEditor` — the 0.1.7 profile-patch editor — probed on the plugin
+ * context first and on the settings service's owner context second, because
+ * that is where the host root mounts it.
  *
  * @param ctx - plugin context.
  * @param ownKeys - this plugin's declared config fields.
- * @param namespaces - the 0.1.5 section namespaces this plugin owns.
  */
-async function cleanupEntryConfig(ctx: Parameters<typeof apply>[0], ownKeys: readonly string[], namespaces: readonly string[]): Promise<void> {
+async function cleanupEntryConfig(ctx: Parameters<typeof apply>[0], ownKeys: readonly string[]): Promise<void> {
   // RETRIES, deliberately: `configEditor.edit` writes under the profile's
   // package.json lock, and every plugin migrating on the same boot contends for
   // that ONE lock — four sibling plugins seeding at once measured exactly one
@@ -1224,13 +1139,7 @@ async function cleanupEntryConfig(ctx: Parameters<typeof apply>[0], ownKeys: rea
   const attempts = 10
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      // The legacy settings.yaml import writes this same profile patch, one
-      // section at a time, for seconds after the Loader settles — and it holds
-      // the very lock this cleanup needs, and rewrites our row while we watch.
-      // Wait for that write storm to end before the first attempt, then back
-      // off between retries.
-      if (attempt === 0) await waitForProfileQuiet()
-      else await new Promise(resolve => setTimeout(resolve, 2_000 + Math.random() * 1_000))
+      if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 2_000 + Math.random() * 1_000))
       const probe = ctx as unknown as {
         get?: (name: string) => unknown
         fiber?: { entry?: unknown }
@@ -1267,23 +1176,9 @@ async function cleanupEntryConfig(ctx: Parameters<typeof apply>[0], ownKeys: rea
         })
         return
       }
-      // 0.1.5: rebuild each namespace's user layer empty. Every one of this
-      // plugin's three sections is declared by this plugin alone (its schema IS
-      // the field list), so an empty section is exactly "our keys, nothing else".
-      await new Promise(resolve => {
-        ctx.inject(['settings'], settingsCtx => {
-          const settings = settingsCtx.settings as unknown as {
-            installSection?: unknown
-            replace?: (ns: string, section: Record<string, unknown>) => Promise<unknown>
-          }
-          if (typeof settings?.replace !== 'function' || typeof settings.installSection !== 'function') {
-            resolve(undefined)
-            return
-          }
-          Promise.all(namespaces.map(ns => Promise.resolve(settings.replace!(ns, {})).catch(() => undefined)))
-            .then(() => resolve(undefined))
-        })
-      })
+      // No editor and no entry: nothing to clean (the row does not exist yet,
+      // or this host does not expose the profile patch). Idempotent by nature,
+      // so a later apply retries.
       return
     } catch (error: unknown) {
       if (attempt === attempts - 1) {
@@ -1332,75 +1227,56 @@ export function apply(ctx: Context, config: Config): void {
   let current = (): Config => ({ ...readConfig(config), ...store.values() }) as Config
 
   /**
-   * One-time migration: per field — the file never held it → take the entry;
-   * the card HAS written this file → keep the file; the entry carries a
-   * NON-DEFAULT value → take the entry (the legacy settings.yaml import lands
-   * only after the Loader settles, i.e. after this plugin's first apply, and a
-   * seed taken inside that window can hold a stale or mis-encoded value); the
-   * entry only carries the schema default → keep the file.
+   * One-time seed: per field — the file never held it → take the entry; the
+   * card HAS written this file → keep the file; the entry carries a
+   * NON-DEFAULT value → take the entry; the entry only carries the schema
+   * default → keep the file.
    *
    * That last clause is load-bearing: a bundle layer's insert config does NOT
    * reach the composition (verified with `dsh --dump-config`), so once the
    * one-time cleanup has emptied the entry row the entry answers pure defaults —
    * treating those as authoritative would erase the user's values on the next
-   * boot. Re-checked on every apply, which is also what closes the legacy
-   * import's timing window.
+   * boot. Re-checked on every apply, which is also what closes the volatile
+   * commit timing window.
    *
    * When the entry is authoritative, its own fields are then deleted from the
    * profile row, so no second source of truth remains.
    */
   const migrateOwnSettings = (): void => {
-    const legacy = readLegacySections([QODER_SETTINGS_NS, QODER_GLOBAL_SETTINGS_NS, QODER_QUOTA_SETTINGS_NS])
     const seeded: Record<string, unknown> = {}
     for (const key of CONFIG_KEYS) {
       const entryValue = readField(config, key)
-      const legacyValue = legacy === undefined ? undefined : legacy[key]
       const holds = Object.hasOwn(store.user, key)
       if (!holds) {
-        // First seed — the first NON-DEFAULT candidate, entry before legacy, and
-        // only then an explicit default so the stored layer stays complete. A
-        // schema default (an empty array, `true` for a toggle that defaults on)
-        // is NOT a value to seed on: seeding it here is what starved the legacy
-        // layer, whose document is the only surviving copy of this plugin's
-        // 0.1.5 settings.
+        // First seed — the first NON-DEFAULT candidate, and only then an
+        // explicit default so the stored layer stays complete. A schema
+        // default (an empty array, `true` for a toggle that defaults on) is
+        // not a value to seed on.
         if (entryValue !== undefined && JSON.stringify(entryValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) seeded[key] = entryValue
-        else if (legacyValue !== undefined && JSON.stringify(legacyValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) seeded[key] = legacyValue
         else if (entryValue !== undefined) seeded[key] = entryValue
-        else if (legacyValue !== undefined) seeded[key] = legacyValue
         continue
       }
       if (store.edited) continue
       if (entryValue !== undefined && JSON.stringify(entryValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) {
         seeded[key] = entryValue
-        continue
-      }
-      if (legacyValue !== undefined && JSON.stringify(legacyValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) {
-        seeded[key] = legacyValue
       }
     }
     if (Object.keys(seeded).length === 0) return
     store.patch(seeded)
-    void cleanupEntryConfig(ctx, CONFIG_KEYS, [QODER_SETTINGS_NS, QODER_GLOBAL_SETTINGS_NS, QODER_QUOTA_SETTINGS_NS])
+    void cleanupEntryConfig(ctx, CONFIG_KEYS)
   }
   migrateOwnSettings()
 
-  // A volatile-only configuration change — which is what the legacy
-  // settings.yaml import performs, because every field of this Config is
+  // A volatile-only configuration change — every field of this Config is
   // `.volatile()` — commits through the loader's volatile fast path: the
   // references are updated IN PLACE and `apply()` is NOT run again. Seeding
   // only inside `apply` would never observe values arriving that way. This
   // event fires on exactly that commit (the same mechanism the built-in
-  // `dsh-llm-pi-ai` uses), so the seed rule re-evaluates.
-  // Both events are Host-internal channels the 0.1.5 typings do not declare, so
-  // they reach `on` through the string-keyed escape hatch rather than the typed
-  // event map — exactly how the host's own `installSection`/probe wiring reads
-  // service shapes this bundle's typings predate.
+  // `dsh-llm-pi-ai` uses), so the seed rule re-evaluates. The event is a
+  // Host-internal channel the typings do not declare, so it reaches `on`
+  // through the string-keyed escape hatch rather than the typed event map.
   const eventSink = ctx as unknown as { on: (event: string, listener: () => void) => void }
   eventSink.on('loader/volatile-update', () => { migrateOwnSettings() })
-  // Every profile recomposition — including each section the legacy import
-  // writes — refreshes this stamp, which is what waitForProfileQuiet reads
-  // before cleaning our row up.
-  eventSink.on('app-boot/config-reload', () => { lastConfigReloadAt = Date.now() })
 
   /** Timers and in-flight work belonging to this plugin instance. */
   let stopped = false

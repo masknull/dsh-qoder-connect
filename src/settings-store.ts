@@ -30,33 +30,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { qoderPluginDataDir } from './paths.ts'
-// js-yaml is the parser the Host itself uses (cordis-plugin-include's
-// dependency). It is NOT resolvable from a plugin's own module path — the Host
-// keeps it in its own install root, and a plugin installed through a junction
-// resolves its dependencies from its own checkout — so it is declared in this
-// package's dependencies, installed into the checkout's node_modules, and
-// inlined by the build, which keeps the published artifact self-contained.
-//
-// CJS interop: rolldown inlines this CJS module, and a named import across that
-// boundary is not guaranteed to survive the transform. Resolve the callable off
-// the default export, with the named shape first, so either outcome works.
-// CJS interop: rolldown inlines this CJS module, and a named import across that
-// boundary is not guaranteed to survive the transform. Resolve the callable off
-// the default export, with the named shape first, so either outcome works. The
-// module's shape is declared in ./js-yaml.d.ts.
-import yamlModule from 'js-yaml'
-
-const yaml = yamlModule as unknown as {
-  load?: (text: string) => unknown
-  default?: { load?: (text: string) => unknown }
-}
-
-const loadYaml = (typeof yaml.load === 'function' ? yaml.load : yaml.default?.load) as
-  | ((text: string) => unknown)
-  | undefined
 
 /** Settings file name inside the plugin data directory. */
 const SETTINGS_FILE_NAME = 'settings.json'
@@ -95,62 +70,11 @@ export function writeSettings(values: Record<string, unknown>): void {
   renameSync(tmp, path)
 }
 
-/** Resolve `$DSH_HOME` the way the Host does, without importing a Host package. */
-function dshHome(): string {
-  const fromEnv: string | undefined = process.env.DSH_HOME?.trim() || undefined
-  if (fromEnv !== undefined) return fromEnv
-  return join(homedir(), '.dsh')
-}
-
-/**
- * Read this plugin's sections out of the legacy settings document.
- *
- * The 0.1.5 host kept every plugin's settings in `$DSH_HOME/settings.yaml`;
- * 0.1.7 renames it to `settings.yaml.imported` once, on the first boot, and
- * imports only the sections whose names match a profile entry id. This
- * plugin's 0.1.5 sections were keyed by its SERVED NAMESPACES (`qoder`,
- * `qoder-global`, `qoder-quota`), which name no entry in the profile — the row
- * is `llm-qoder` — so the platform refuses them and their data survives only
- * in the renamed document. Reading it here recovers that data independently of
- * the platform's import, its section-name mapping, and its timing.
- *
- * @param namespaces - the section names the 0.1.5 host keyed this plugin's
- *   settings under (one per served section).
- * @returns the union of those sections' fields, or undefined when the document
- *   is absent, unreadable, or holds none of them.
- */
-export function readLegacySections(namespaces: readonly string[]): Record<string, unknown> | undefined {
-  let path: string | undefined
-  for (const name of ['settings.yaml', 'settings.yaml.imported']) {
-    const candidate = join(dshHome(), name)
-    if (existsSync(candidate)) { path = candidate; break }
-  }
-  if (path === undefined || loadYaml === undefined) return undefined
-  let document: unknown
-  try {
-    document = loadYaml(readFileSync(path, 'utf8'))
-  } catch {
-    // Unreadable or unparsable: the legacy layer is a bonus, never a
-    // requirement — the seed rule falls through to the entry and the defaults.
-    return undefined
-  }
-  if (document === null || typeof document !== 'object') return undefined
-  const merged: Record<string, unknown> = {}
-  let found = false
-  for (const ns of namespaces) {
-    const section = (document as Record<string, unknown>)[ns]
-    if (section === null || typeof section !== 'object' || Array.isArray(section)) continue
-    Object.assign(merged, section)
-    found = true
-  }
-  return found ? merged : undefined
-}
-
 /**
  * Reserved bookkeeping key: how many writes the settings card has made through
- * this store. Its presence separates "the file holds migration seed" from "the
- * file holds the user's live edits" — see the seed rule in ./index.ts. Field
- * readers address their fields by name and never collide with it.
+ * this store. Its presence separates "the file holds the startup seed" from
+ * "the file holds the user's live edits" — see the seed rule in ./index.ts.
+ * Field readers address their fields by name and never collide with it.
  */
 const WRITE_MARK = '__writes'
 
@@ -174,12 +98,10 @@ export class SettingsStore {
   /**
    * Whether the settings card has ever written through this store.
    *
-   * False during the migration window — the window where a 0.1.5 settings.yaml
-   * import (which lands only after the Loader settles, i.e. AFTER this plugin's
-   * first apply) can still deliver the user's real values, and where a first
-   * seed may have been taken before that import. While false the entry config
-   * stays authoritative; once the card writes, the file is — a runtime edit
-   * must never be regressed by a stale profile row.
+   * Until it has, the entry config stays the fallback layer (a hand-edited
+   * profile row can still seed a fresh install); once the card writes, the
+   * file is authoritative — a runtime edit must never be regressed by a stale
+   * profile row.
    */
   get edited(): boolean {
     return typeof this.user[WRITE_MARK] === 'number' && this.user[WRITE_MARK] > 0
