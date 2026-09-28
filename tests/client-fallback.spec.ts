@@ -51,6 +51,14 @@ const SHARED_ITEM_SLOT = 'plugin-settings.item'
 const SHARED_ITEM_ID = 'dsh-qoder-connect'
 const SHARED_SECTION_LABEL = '插件设置'
 
+/**
+ * The plugin manager's bundle-configuration seat, mirroring src/client/index.tsx:
+ * the sidebar's Plugins panel renders a bundle's own configuration on the
+ * bundle's detail page through this keyed slot, keyed by the package name.
+ */
+const PLUGIN_MANAGER_SLOT = 'plugins.bundle.config'
+const PLUGIN_MANAGER_KEY = 'dsh-qoder-connect'
+
 /** A minimal stand-in for the plugin-owned settings scope (load() never resolves in the mirror). */
 const stubQuotaScope = {
   getSnapshot: () => ({ status: 'loading', value: undefined, writable: true }),
@@ -92,16 +100,18 @@ function apply(ctx: any): void {
     // China variant, and Global variant into one single card titled "Qoder".
     // The shared 《插件设置》 block dispatches its `list` entries by id
     // (ascending order); the card rank is fixed across the three connect
-    // plugins: the first sibling takes 10, the second 20, this one 30.
-    const registerUnifiedCard = (): (() => void) => {
-      const inject = () => ({
-        t,
-        scope: quotaScope,
-        signedIn: () => ({ cn: false, global: false }),
-        unified: true,
-      })
-      return ctx.slots.inject(SHARED_ITEM_SLOT, () => ctx.slots.register({ name: SHARED_ITEM_SLOT, id: SHARED_ITEM_ID, order: 30, inject }, Component))
-    }
+    // plugins: the first sibling takes 10, the second 20, this one 30. The
+    // same face is reused on this bundle's plugin-manager page below, opened
+    // expanded there.
+    const unifiedCardInject = (defaultOpen = false): any => ({
+      t,
+      scope: quotaScope,
+      signedIn: () => ({ cn: false, global: false }),
+      unified: true,
+      defaultOpen,
+    })
+    const registerUnifiedCard = (): (() => void) =>
+      ctx.slots.inject(SHARED_ITEM_SLOT, () => ctx.slots.register({ name: SHARED_ITEM_SLOT, id: SHARED_ITEM_ID, order: 30, inject: unifiedCardInject }, Component))
     const joinSharedSettingsBlock = (): void => {
       ctx.slots.inject(SHARED_SECTION_SLOT, () => {
         let disposeContainer: (() => void) | undefined
@@ -134,6 +144,24 @@ function apply(ctx: any): void {
     // 无条件进行。
     adoptQuotaScope(stubQuotaScope)
     joinSharedSettingsBlock()
+
+    // The same unified card on this bundle's page in the sidebar's Plugins
+    // panel: `ctx.slots.inject` defers until the Host's plugin manager
+    // declares the seat, so a deployment without it never throws.
+    const joinPluginManagerBlock = (): void => {
+      try {
+        ctx.slots.inject(PLUGIN_MANAGER_SLOT, () => ctx.slots.register({
+          name: PLUGIN_MANAGER_SLOT,
+          key: PLUGIN_MANAGER_KEY,
+          // The bundle's page in the Plugins panel has room for the whole
+          // configuration, so the card opens expanded there.
+          inject: () => unifiedCardInject(true),
+        }, Component))
+      } catch (error: unknown) {
+        console.error('[dsh-qoder-connect] could not join the plugin manager page:', error)
+      }
+    }
+    joinPluginManagerBlock()
 
     // Dashboard internals stand-ins (see the note above).
     const QUOTA_PANEL_ID = 'qoder-quota-panel'
@@ -352,10 +380,11 @@ describe('client card fallback', () => {
     expect(injections).toContain('main')
     expect(injections).toContain('sidebar.footer.action')
     expect(injections).toContain('conversation.input.right')
+    expect(injections).toContain(PLUGIN_MANAGER_SLOT)
 
     // The seats this plugin claims, by their Qoder keys and ids.
     const pluginKeys = registerCalls.flatMap(call => typeof call['key'] === 'string' ? [call['key']] : [])
-    expect(pluginKeys.sort()).toEqual(['qoder-quota-panel'])
+    expect(pluginKeys.sort()).toEqual(['dsh-qoder-connect', 'qoder-quota-panel'])
     const seatIds = registerCalls.flatMap(call => typeof call['id'] === 'string' ? [call['id']] : [])
     expect(seatIds.sort()).toEqual(['dsh-qoder-connect', 'plugin-settings', 'qoder-global-quota', 'qoder-probe', 'qoder-quota'])
     // The probe seat belongs to the international-or-not composer chrome this
@@ -403,6 +432,48 @@ describe('client card fallback', () => {
     restore()
   })
 
+  it('registers the unified card on the plugin manager page under the package key', () => {
+    const { errors, restore } = useErrorSpy()
+    const { ctx, registerCalls } = fakeContext()
+
+    expect(() => apply(ctx)).not.toThrow()
+    expect(errors).toEqual([])
+
+    const entries = registerCalls.filter(call => call['name'] === PLUGIN_MANAGER_SLOT)
+    expect(entries).toHaveLength(1)
+    // The key is the ledger key the page reads to show the configuration
+    // section: this bundle's npm package name, spelled exactly.
+    expect(entries[0]?.['key']).toBe(PLUGIN_MANAGER_KEY)
+    // The same face the shared block's card gets — same scope, same unified
+    // layout — so one save updates both surfaces; the Plugins-panel copy
+    // opens expanded, the settings block's stays collapsed.
+    const settingsFace = (entries[0]?.['inject'] as () => { unified?: boolean; defaultOpen?: boolean })()
+    expect(settingsFace).toMatchObject({ unified: true, defaultOpen: true })
+    const blockFace = registerCalls
+      .find(call => call['name'] === SHARED_ITEM_SLOT)?.['inject'] as () => { unified?: boolean; defaultOpen?: boolean }
+    expect(blockFace()).toMatchObject({ unified: true, defaultOpen: false })
+
+    restore()
+  })
+
+  it('still registers everything else when the plugin manager seat is unavailable', () => {
+    const { errors, restore } = useErrorSpy()
+    const { ctx, injections, registerCalls } = fakeContext({ slot: PLUGIN_MANAGER_SLOT })
+
+    expect(() => apply(ctx)).not.toThrow()
+    // One boundary reports itself; the settings block and the model channel
+    // are untouched.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('could not join the plugin manager page')
+    expect(injections).not.toContain(PLUGIN_MANAGER_SLOT)
+    expect(registerCalls.filter(call => call['name'] === SHARED_ITEM_SLOT)).toHaveLength(1)
+    expect(injections).toContain('main')
+    expect(injections).toContain('sidebar.footer.action')
+    expect(injections).toContain('conversation.input.right')
+
+    restore()
+  })
+
   it('falls back to attaching when the container race is lost mid-call', () => {
     const { errors, restore } = useErrorSpy()
     const { ctx, registerCalls } = fakeContext()
@@ -435,10 +506,10 @@ describe('mirror stays verbatim with src/client/index.tsx', () => {
 
   it('every console.error message in the entry is mirrored word for word', () => {
     const messages = [...entrySource.matchAll(/console\.error\(\s*'([^']+)'/g)].map(match => match[1]!)
-    // Guard the guard: the real entry must actually carry the five boundaries
+    // Guard the guard: the real entry must actually carry the six boundaries
     // this spec mirrors (outer catch + the lost container race, the dashboard,
-    // the sidebar footer, and the panel close).
-    expect(messages).toHaveLength(5)
+    // the sidebar footer, the panel close, and the plugin manager page).
+    expect(messages).toHaveLength(6)
     for (const message of messages) {
       expect(mirrorSource).toContain(message)
     }
@@ -472,6 +543,8 @@ describe('mirror stays verbatim with src/client/index.tsx', () => {
       // The shared 《插件设置》 block: the container and the child slot the
       // three connect plugins must spell identically.
       'settings.section', 'plugin-settings', 'plugin-settings.item',
+      // The plugin manager's bundle-configuration seat, keyed by the package name.
+      'plugins.bundle.config',
     ]
     for (const seat of seats) {
       expect(entrySource).toContain(seat)

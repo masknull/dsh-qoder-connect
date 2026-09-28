@@ -9,19 +9,20 @@
  * row, and opens a dashboard in the layout's keyed `main` slot on click. In
  * the 56px rail it collapses to a 36px icon button carrying the ring.
  *
- * Data comes from the variant's status route (poll, paused while hidden);
- * strings come from the `panel.qoder-quota` locale namespace; classes come
- * from `./quota-styles.ts` (`qdp-` prefix).
+ * Data comes from the shared status store: the card acquires its variant and
+ * the store's ONE ticker reads each live variant once for every surface
+ * (this card, the settings cards, the dashboard), paused while the page is
+ * hidden; strings come from the `panel.qoder-quota` locale namespace; classes
+ * come from `./quota-styles.ts` (`qdp-` prefix).
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import { isQoderWebStatus } from './status-document.ts'
 import type { QoderWebStatus } from '../status-paths.ts'
 import type { QoderSettingsKey } from './locales.ts'
 import { clampPercent, mergeCreditAccounts, sortPackageRows, visibleQuotaGroups } from './quota-merge.ts'
-import { onQuotaSettingsChange, noteQuotaStatus, quotaPollMs, quotaSettingsRevision, quotaStatus, quotaStatusFetchedAt, quotaToggles, variantOfStatusPath } from './quota-settings-store.ts'
+import { acquireLiveSurface, onQuotaSettingsChange, quotaReadFailure, quotaSettingsRevision, quotaStatus, quotaStatusFetchedAt, quotaToggles, variantOfStatusPath } from './quota-settings-store.ts'
 /** Everything the registration binds into the card. */
 export interface SidebarQuotaCardInjected {
   /** Translator bound to the quota namespace. */
@@ -228,63 +229,29 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
   const variantId = statusPath !== undefined ? variantOfStatusPath(statusPath) : 'qoder'
   const nameKey: QuotaCopyKey = variantId === 'qoder-global' ? 'quotaCardGlobal' : 'quotaCardCN'
   const wide = props.wide !== false
-  const [failed, setFailed] = useState(false)
-  // The saved toggle gates the card live; the shared store's revision is the
-  // subscription, so a landed save re-renders (and re-gates) instantly — and
-  // the SAME subscription delivers documents fetched by ANY surface (the
-  // dashboard's refresh, the other card's poll, this card's own mount fetch),
-  // so every surface always shows the same latest numbers.
+  // The last read failure is shared state too: whichever surface's read
+  // failed, this card's ring shows it (a failed read empties the ring rather
+  // than inventing numbers).
   useSyncExternalStore(onQuotaSettingsChange, quotaSettingsRevision)
   const enabled = variantId === 'qoder' ? quotaToggles().cn : quotaToggles().global
+  const failed = quotaReadFailure(variantId) !== undefined
   const status = quotaStatus(variantId)
   const signedIn = status?.status === 'signed-in'
 
   // Poll on the configured interval for as long as the card is enabled —
   // the user's design: the SIDEBAR card keeps itself current on the setting's
-  // cadence (the freshness/cache rule lives on the panel's display path
-  // only). Skips ticks while the document is hidden, and re-fetches when
-  // visibility returns so a long-idle page catches up.
+  // cadence. The poll itself is shared now: the card acquires its variant and
+  // the store's ONE ticker reads each live variant once for every surface, so
+  // an enabled sidebar card beside an expanded settings card costs ONE
+  // request a minute between them. The saved toggle gates the card live; the
+  // shared store's revision is the subscription, so a landed save re-renders
+  // (and re-gates) instantly — and the SAME subscription delivers documents
+  // fetched by ANY surface (the dashboard's refresh, the settings card's
+  // poll, this card's own mount read), so every surface always shows the
+  // same latest numbers.
   useEffect(() => {
     if (statusPath === undefined || !enabled) return undefined
-    let disposed = false
-    let timer: number | undefined
-    const controller = new AbortController()
-    const refresh = async (): Promise<void> => {
-      try {
-        const response = await fetch(statusPath, { signal: controller.signal, headers: { accept: 'application/json' } })
-        const body: unknown = await response.json()
-        if (disposed) return
-        if (!response.ok || !isQoderWebStatus(body)) {
-          setFailed(true)
-          return
-        }
-        setFailed(false)
-        noteQuotaStatus(variantId, body)
-      } catch {
-        if (!disposed) setFailed(true)
-      }
-    }
-    const isHidden = (): boolean => typeof document !== 'undefined' && document.hidden
-    const loop = (): void => {
-      if (isHidden()) return
-      void refresh()
-    }
-    timer = window.setInterval(loop, Math.max(60_000, quotaPollMs()))
-    void refresh()
-    const onVisible = (): void => {
-      if (!isHidden()) loop()
-    }
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisible)
-    }
-    return () => {
-      disposed = true
-      controller.abort()
-      if (timer !== undefined) window.clearInterval(timer)
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisible)
-      }
-    }
+    return acquireLiveSurface(variantId)
   }, [statusPath, enabled, variantId])
 
   // The gate is a render decision, not a registration decision (commandcode's
@@ -407,10 +374,6 @@ export interface QuotaDashboardInjected {
 
 /** Props the dashboard panel receives through its inject face. */
 export interface QuotaDashboardState {
-  /** Both variants' status documents, in `statusPaths` order. */
-  documents: readonly (QoderWebStatus | undefined)[]
-  /** When the shared fetch last settled. */
-  fetchedAt: number | undefined
   /** Whether the shared fetch is in flight. */
   loading: boolean
   /** The variant the last card click asked for (drives the followed tab). */
@@ -449,10 +412,11 @@ export interface QuotaDashboardProps {
  * pattern): CN and international are separate accounts with separate package
  * lists, so mixing them into one column would misattribute every number.
  *
- * The panel fetches BOTH routes itself on mount and on the shared poll
- * interval — a user opening the panel must never wait for the sidebar cards'
- * next tick, and must never see a stale "sign in" just because no poll had
- * run yet. The tab defaults to the variant whose card was clicked.
+ * The panel holds its shown variant live through the shared store — it reads
+ * at once on open (unless the shared document is still within the settings
+ * interval, which a click then shows as cached numbers) and the shared ticker
+ * keeps it current from then on, so a user opening the panel never waits for
+ * a poll and never meets a stale "sign in" because nothing had read yet.
  */
 export function QuotaDashboard(props: QuotaDashboardProps): React.ReactNode {
   const { t = fallbackT, statusPaths, refresh, close, useQuotaDashboard, onVariantPicked } = props
@@ -468,7 +432,10 @@ export function QuotaDashboard(props: QuotaDashboardProps): React.ReactNode {
   const activeVariant = variantOfStatusPath(activePathResolved)
   const status = quotaStatus(activeVariant)
   const loading = state.loading
-  const fetchedAt = state.fetchedAt
+  // The panel's "updated at" is the SHARED document's fetch time — the same
+  // fact the sidebar card prints — so the two never disagree, whichever
+  // surface refreshed last.
+  const fetchedAt = quotaStatusFetchedAt(activeVariant)
   const credits = status !== undefined && 'credits' in status ? status.credits : undefined
   // The detail table: EVERY package, unmerged, exhausted included — the
   // sidebar card is the merged overview, this panel is the itemised ledger.

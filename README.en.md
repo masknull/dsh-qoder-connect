@@ -42,6 +42,10 @@ The *“Qoder sidebar display”* card controls both widgets' visibility and the
 
 ![Sidebar display toggles](assets/3.png)
 
+### Settings inside the Plugins panel
+
+The same Qoder settings card has a second home: sidebar → **Plugins** panel → Installed → the *Qoder 连接器* card. Open the card's detail page and the full configuration sits between the description and the component list — PAT, per-variant switches, context windows, model toggles, check-in and sidebar-quota settings, identical to the *Settings → Plugin settings* card (both surfaces share one configuration). On hosts that do not declare the seat (older DSH), only the Settings entry exists and nothing else changes.
+
 ### Picking a model in a session
 
 Once a PAT is saved, the model picker gains a Qoder group with per-model rate multipliers (`x0.5`, `x0`, …):

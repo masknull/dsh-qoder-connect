@@ -20,14 +20,18 @@ import type {
   QoderWebCreditAccount,
   QoderWebStatus,
 } from '../status-paths.ts'
-import { isQoderWebStatus } from './status-document.ts'
 import type { QoderSettingsKey } from './locales.ts'
 import { QuotaSettingsContent, type QuotaSection, type QuotaSettingsScope } from './QuotaSettingsCard.tsx'
 import {
+  acquireLiveCard,
   noteQuotaSignIn,
   noteQuotaStatus,
   onQuotaSettingsChange,
+  quotaReadFailure,
+  quotaSettingsRevision,
   quotaSignInState,
+  quotaStatus,
+  refreshQuotaStatus,
 } from './quota-settings-store.ts'
 
 /** Localized copy injected by the browser-plugin registration. */
@@ -45,6 +49,14 @@ export interface QoderPluginCardInjected {
    * Whether to render as the unified Qoder card (merging quota settings + CN + Global with tabs).
    */
   unified?: boolean
+  /**
+   * Whether the card starts expanded. The shared 《插件设置》 block lists its
+   * cards collapsed; this bundle's page in the sidebar's Plugins panel has
+   * room for the whole configuration, so that registration opens the card at
+   * once. The fold state stays the viewer's afterwards — the two surfaces do
+   * not share it.
+   */
+  defaultOpen?: boolean
 }
 
 /** The browser-visible half of a variant: identity, routes, and copy keys. */
@@ -97,8 +109,6 @@ export const QODER_CARD_VARIANTS: readonly QoderCardVariant[] = [QODER_CN_CARD, 
 export type QoderPluginCardProps =
   PropsRuntime<'plugin-settings.item'>
   & Partial<QoderPluginCardInjected>
-
-const POLL_INTERVAL_MS = 60_000
 
 /*
  * Styling mirrors the Settings panel's own plugin card (`.YyYd_a_card` in the
@@ -867,7 +877,7 @@ function CheckInLogTable({
 
 /** Render Qoder PAT state, quota, catalog, and context capacities as one expandable card. */
 export function QoderPluginCard(props: QoderPluginCardProps) {
-  const { t, scope, signedIn, variant, unified } = props
+  const { t, scope, signedIn, variant, unified, defaultOpen } = props
   if (t === undefined) throw new Error('Qoder plugin card requires its translation function')
 
   const isUnified = unified === true
@@ -877,12 +887,9 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
     ? (activeVariantId === 'qoder' ? QODER_CN_CARD : QODER_GLOBAL_CARD)
     : (variant ?? QODER_CN_CARD)
 
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen === true)
   const [hovered, setHovered] = useState(false)
   const [headerFocused, setHeaderFocused] = useState(false)
-  const [status, setStatus] = useState<QoderWebStatus>()
-  const [signedInState, setSignedInState] = useState<boolean>()
-  const [readFailure, setReadFailure] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [patDraft, setPatDraft] = useState('')
   const [replacing, setReplacing] = useState(false)
@@ -894,8 +901,9 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
   const [checkingIn, setCheckingIn] = useState(false)
   const [clearingLogs, setClearingLogs] = useState(false)
   const [checkInNotice, setCheckInNotice] = useState<string>()
+  /** A write action's failure, reported on the same line as a read failure. */
+  const [writeFailure, setWriteFailure] = useState<string>()
   const mounted = useRef(true)
-  const readSeq = useRef(0)
   const manualControllers = useRef(new Set<AbortController>())
 
   useEffect(() => {
@@ -913,72 +921,78 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
     return controller
   }, [])
 
+  /**
+   * The shown variant's shared read state.
+   *
+   * The document and the last read failure arrive through ONE revision bump,
+   * whichever surface read them: the shared poller reads each live variant
+   * once for every surface that shows it, so this card expanded here and the
+   * same card in the plugin-manager panel cost one request a minute between
+   * them, not two. Before the first document lands a failed read shows as an
+   * error document; beside a document already on screen it shows as a notice
+   * under the account row, exactly as the per-card fetch did.
+   */
+  useSyncExternalStore(onQuotaSettingsChange, quotaSettingsRevision)
+  const readFailure = quotaReadFailure(currentVariant.id)
+  const sharedDocument = quotaStatus(currentVariant.id)
+  const status: QoderWebStatus | undefined = readFailure !== undefined && sharedDocument === undefined
+    ? { status: 'error', message: readFailure.kind === 'invalid' ? t('statusResponseInvalid') : readFailure.message }
+    : sharedDocument
+  const signedInState = status?.status === 'signed-in'
+    ? true
+    : status?.status === 'signed-out'
+      ? false
+      : undefined
+
   const authKey = status === undefined || status.status === 'error' ? undefined : status.authKey
 
-  const refresh = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
-    const seq = ++readSeq.current
-    const current = (): boolean => mounted.current && signal?.aborted !== true && seq === readSeq.current
-    try {
-      const response = await fetch(currentVariant.statusPath, {
-        headers: { accept: 'application/json' },
-        credentials: 'same-origin',
-        ...signal === undefined ? {} : { signal },
-      })
-      const value: unknown = await response.json().catch(() => undefined)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      if (!isQoderWebStatus(value)) throw new Error(t('statusResponseInvalid'))
-      if (!current()) return false
-      setStatus(value)
-      if (value.status === 'signed-in') {
-        setSignedInState(true)
-        noteQuotaStatus(currentVariant.id, value)
-      } else if (value.status === 'signed-out') {
-        setSignedInState(false)
-        noteQuotaStatus(currentVariant.id, value)
-      }
-      setReadFailure(undefined)
-      return true
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : t('requestFailed')
-      if (current()) {
-        setReadFailure(message)
-        setStatus(previous => previous === undefined ? { status: 'error', message } : previous)
-      }
-      return false
-    }
-  }, [currentVariant.statusPath, t])
+  /**
+   * Force one shared read of the shown variant.
+   *
+   * The store's read always starts its own request — an explicit read must be
+   * able to postdate the write or the click that precedes it — and publishes
+   * for every surface of the variant, so a manual refresh here updates the
+   * sidebar cards and the quota panel too. A successful read also clears a
+   * write action's notice, exactly as the per-card fetch did.
+   */
+  const refresh = useCallback(async (): Promise<boolean> => {
+    const ok = await refreshQuotaStatus(currentVariant.id)
+    if (ok) setWriteFailure(undefined)
+    return ok
+  }, [currentVariant.id])
 
+  /**
+   * The expanded card is a poll holder of the shown variant.
+   *
+   * The shared ticker reads the variant once a minute while any card holds it
+   * and parks it on a signed-out document (nothing changes without a PAT);
+   * collapsing or unmounting releases the demand. Opening re-reads at once
+   * only when the shared document is past its minute — a second card opening
+   * beside a live one shows the numbers already on screen.
+   */
+  useEffect(() => {
+    if (!open) return undefined
+    return acquireLiveCard(currentVariant.id)
+  }, [open, currentVariant.id])
+
+  /**
+   * Opening (or switching variant) clears the transient entry state — a
+   * discarded draft must not wait for the user on the next open. The document
+   * itself is shared state now and stays on screen while the card re-opens.
+   */
   useEffect(() => {
     if (!open) return
-    setStatus(undefined)
-    setSignedInState(undefined)
-    setReadFailure(undefined)
     setPatDraft('')
     setReplacing(false)
     setPatError(undefined)
     setPatNotice(undefined)
-    const controller = new AbortController()
-    void refresh(controller.signal)
-    return () => { controller.abort() }
-  }, [open, currentVariant.statusPath, refresh])
-
-  useEffect(() => {
-    if (!open || signedInState === false) return
-    const controller = new AbortController()
-    const timer = window.setInterval(() => { void refresh(controller.signal) }, POLL_INTERVAL_MS)
-    return () => {
-      window.clearInterval(timer)
-      controller.abort()
-    }
-  }, [open, refresh, signedInState])
+  }, [open, currentVariant.id])
 
   const manualRefresh = async (): Promise<void> => {
     setBusy(true)
-    const controller = trackController()
     try {
-      await refresh(controller.signal)
+      await refresh()
     } finally {
-      manualControllers.current.delete(controller)
       if (mounted.current) setBusy(false)
     }
   }
@@ -1007,7 +1021,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {
-        setReadFailure(error instanceof Error ? error.message : t('requestFailed'))
+        setWriteFailure(error instanceof Error ? error.message : t('requestFailed'))
       }
       manualControllers.current.delete(controller)
       return
@@ -1015,7 +1029,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
       if (mounted.current) setBusy(false)
     }
     try {
-      await refresh(controller.signal)
+      await refresh()
     } finally {
       manualControllers.current.delete(controller)
     }
@@ -1055,7 +1069,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
       if (mounted.current) setCheckingIn(false)
     }
     try {
-      await refresh(controller.signal)
+      await refresh()
     } finally {
       manualControllers.current.delete(controller)
     }
@@ -1085,7 +1099,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
       if (mounted.current) setClearingLogs(false)
     }
     try {
-      await refresh(controller.signal)
+      await refresh()
     } finally {
       manualControllers.current.delete(controller)
     }
@@ -1125,10 +1139,10 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
           : t('requestFailed')
         throw new Error(reason)
       }
-      await refresh(controller.signal)
+      await refresh()
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {
-        setReadFailure(error instanceof Error ? error.message : t('requestFailed'))
+        setWriteFailure(error instanceof Error ? error.message : t('requestFailed'))
       }
     } finally {
       manualControllers.current.delete(controller)
@@ -1178,7 +1192,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
       setReplacing(false)
       setPatNotice(t('patSaved'))
       noteQuotaSignIn(currentVariant.id, true)
-      await refresh(controller.signal)
+      await refresh()
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {
         setPatError(t('patSaveFailed', {
@@ -1216,12 +1230,11 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
         return
       }
       setPatDraft('')
-      const signedOutDoc: QoderWebStatus = { status: 'signed-out', authKey: key }
-      setStatus(signedOutDoc)
-      setSignedInState(false)
-      noteQuotaStatus(currentVariant.id, signedOutDoc)
-      noteQuotaSignIn(currentVariant.id, false)
-      await refresh(controller.signal)
+      // Publish the outcome as an authoritative fact: every surface shows the
+      // signed-out document at once, and a read that started before the clear
+      // can no longer roll the screens back.
+      noteQuotaStatus(currentVariant.id, { status: 'signed-out', authKey: key })
+      await refresh()
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {
         setPatError(t('patSaveFailed', {
@@ -1412,9 +1425,13 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
                   </button>
                 </>}
           </div>
-          {readFailure === undefined || signedInState === undefined
+          {readFailure === undefined && writeFailure === undefined || signedInState === undefined
             ? null
-            : <p style={errorStyle}>{t('statusRefreshFailed', { message: readFailure })}</p>}
+            : <p style={errorStyle}>{t('statusRefreshFailed', {
+              message: readFailure !== undefined
+                ? (readFailure.kind === 'invalid' ? t('statusResponseInvalid') : readFailure.message)
+                : writeFailure,
+            })}</p>}
           {status?.status === 'signed-in'
             ? <>
                 {status.pat === undefined ? null : patSummaryLine(status.pat)}

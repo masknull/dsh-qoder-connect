@@ -9,6 +9,7 @@ import {
 } from '../src/client/QoderPluginCard.tsx'
 import { en } from '../src/client/locales.ts'
 import type { QoderWebStatus } from '../src/status-paths.ts'
+import { resetQuotaStatusForTesting } from '../src/client/quota-settings-store.ts'
 
 /**
  * Card tests for the PAT flow and the three-tab body.
@@ -31,11 +32,22 @@ interface Posted {
   init: RequestInit
 }
 
+/**
+ * The shared status store is module state that outlives a test, and an
+ * expanding card no longer re-reads a document that is still fresh — so each
+ * test starts the clock well past the card's minute. A publish inside the
+ * test then lands at the current time and stays fresh, which is what the
+ * dedup assertions read.
+ */
+let clock = Date.parse('2024-05-01T00:00:00.000Z')
+
 describe('Qoder plugin card', () => {
   let view: ReactTestRenderer | undefined
   let statusBody: unknown
   let statusFails = false
   const posts: Posted[] = []
+  /** Status GETs, in order — what the poll-liveness assertions count. */
+  const gets: string[] = []
   /** Resolvers for held POSTs, so "in flight" is observable, not a race. */
   let releaseQueue: ((body: unknown) => void)[] = []
   let holdPosts = false
@@ -59,6 +71,9 @@ describe('Qoder plugin card', () => {
   }
 
   beforeEach(() => {
+    clock += 10 * 60_000
+    vi.useFakeTimers()
+    vi.setSystemTime(clock)
     signedIn()
     statusFails = false
     holdPosts = false
@@ -75,6 +90,7 @@ describe('Qoder plugin card', () => {
         })
         return { ok: true, status: 200, json: async () => body }
       }
+      gets.push(String(input))
       if (statusFails) throw new Error('socket died')
       return { ok: true, status: 200, json: async () => statusBody }
     }))
@@ -99,6 +115,10 @@ describe('Qoder plugin card', () => {
 
   afterEach(() => {
     act(() => view?.unmount())
+    // The shared store outlives a test: drop its documents and demand so the
+    // next mount reads its own answer.
+    resetQuotaStatusForTesting()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -142,6 +162,10 @@ describe('Qoder plugin card', () => {
     // Without a key the entry would POST into a 403 it cannot pass, so the
     // card withholds it entirely.
     signedOut({ authKey: undefined })
+    // The shared document is per-test state now: age it past the card's minute
+    // so the second mount re-reads instead of showing the first document.
+    clock += 10 * 60_000
+    vi.setSystemTime(clock)
     await mount()
     expect(inputs()).toHaveLength(0)
   })
@@ -248,15 +272,25 @@ describe('Qoder plugin card', () => {
 
   // ---- poll liveness --------------------------------------------------------
 
-  it('polls while signed in and stops once a document confirms sign-out', async () => {
+  it('polls while signed in and parks once a document confirms sign-out', async () => {
     await mount()
+    // The shared ticker is armed by the expanded card's demand, and a tick
+    // reads the live variant once.
     expect([...intervalHandles.keys()]).toHaveLength(1)
-    // The signed-out answer is a fact about the account: the poll parks until
-    // a PAT save re-arms it through the effect.
-    intervalHandles.clear()
+    const readsAfterMount = gets.length
+    await act(async () => { [...intervalHandles.values()][0]!() })
+    expect(gets.length).toBeGreaterThan(readsAfterMount)
+
+    // The signed-out answer is a fact about the account: the poll parks — the
+    // next tick reads nothing — until a PAT save re-arms it through an
+    // explicit read. The ticker itself stays armed while the card holds the
+    // variant, so unmount is what stops it.
     signedOut()
     await press(en.refresh)
-    expect([...intervalHandles.keys()]).toHaveLength(0)
+    expect(JSON.stringify(view!.toJSON())).toContain(en.signedOutHint)
+    const readsAfterSignOut = gets.length
+    await act(async () => { [...intervalHandles.values()][0]!() })
+    expect(gets.length).toBe(readsAfterSignOut)
   })
 
   // ---- context tab: maximum-window preference -------------------------------

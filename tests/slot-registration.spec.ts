@@ -111,3 +111,64 @@ describe('settings.plugin.item holds both cards', () => {
       .toThrow(/not declared/)
   })
 })
+
+/**
+ * The plugin manager's bundle-configuration seat, declared the way its `main`
+ * registration declares it: a keyed child slot with NO `keyProps` table, so
+ * every string is a valid entry key — the bundle's npm package name is what a
+ * registration passes. This is the seat the sidebar's Plugins panel renders a
+ * bundle's own configuration in (between the description and the component
+ * rows), and the registration this plugin adds beside its Settings block card.
+ */
+function declareBundleConfig(core: SlotCore): void {
+  register(core, {
+    name: 'root',
+    children: {
+      'plugins.bundle.config': {
+        kind: 'keyed',
+        scope: 'root',
+      },
+    },
+  })
+}
+
+const bundleConfigEntries = (core: SlotCore): any[] => (core.entries as any)('plugins.bundle.config')
+
+describe('plugins.bundle.config holds the bundle configuration', () => {
+  it('accepts the package-name key this plugin registers', () => {
+    const core = new SlotCore()
+    declareBundleConfig(core)
+    expect(() => register(core, { name: 'plugins.bundle.config', key: 'dsh-qoder-connect' }))
+      .not.toThrow()
+    expect(bundleConfigEntries(core)).toHaveLength(1)
+  })
+
+  it('projects one cell per key, so the page renders the entry it was opened for', () => {
+    const core = new SlotCore()
+    declareBundleConfig(core)
+    register(core, { name: 'plugins.bundle.config', key: 'dsh-qoder-connect' })
+    const cells = (core.entriesOfSlot as any)('plugins.bundle.config') as { options: { key?: string } }[]
+    expect(cells).toHaveLength(1)
+    expect(cells[0]?.options.key).toBe('dsh-qoder-connect')
+  })
+
+  it('rejects a second registration for the same key, which is why the inject disposer owns re-registration', () => {
+    // HMR re-applies the same instance: the SlotRegistry.inject effect disposes
+    // the first registration before a later declaration runs the factory
+    // again, so the live ledger never holds the key twice. A second register
+    // WITHOUT the disposer throws naming the occupant — the rule that makes
+    // the deferral mandatory rather than cosmetic.
+    const core = new SlotCore()
+    declareBundleConfig(core)
+    register(core, { name: 'plugins.bundle.config', key: 'dsh-qoder-connect' })
+    expect(() => register(core, { name: 'plugins.bundle.config', key: 'dsh-qoder-connect' }))
+      .toThrow(/already has an entry for key/)
+  })
+
+  it('requires an explicit key, which is why the registration passes the package name', () => {
+    const core = new SlotCore()
+    declareBundleConfig(core)
+    expect(() => register(core, { name: 'plugins.bundle.config' }))
+      .toThrow(/requires options.key/)
+  })
+})

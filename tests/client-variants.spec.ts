@@ -12,6 +12,7 @@ import {
 } from '../src/client/QoderPluginCard.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import type { QoderSettingsKey } from '../src/client/locales.ts'
+import { resetQuotaStatusForTesting } from '../src/client/quota-settings-store.ts'
 import {
   QODER_AUTH_PATH,
   QODER_GLOBAL_AUTH_PATH,
@@ -123,6 +124,14 @@ describe('card variants', () => {
 describe('plugin card per variant', () => {
   let view: ReactTestRenderer | undefined
   let statusBody: Record<string, unknown>
+  /**
+   * The shared status store is module state that outlives a test, and an
+   * expanding card no longer re-reads a document that is still fresh — so each
+   * test starts the clock well past the card's minute. A publish inside the
+   * test then lands at the current time and stays fresh, which is what the
+   * dedup assertions read.
+   */
+  let clock = Date.parse('2024-05-01T00:00:00.000Z')
   /** Resolvers for in-flight auth POSTs, so "validating PAT" is observable. */
   let pendingAuth: (() => void)[] = []
   /** The auth route's JSON verdict (`{ ok }` or `{ ok: false, error }`). */
@@ -146,6 +155,9 @@ describe('plugin card per variant', () => {
   }
 
   beforeEach(() => {
+    clock += 10 * 60_000
+    vi.useFakeTimers()
+    vi.setSystemTime(clock)
     signedIn()
     pendingAuth = []
     authAnswer = () => ({ ok: true })
@@ -181,6 +193,10 @@ describe('plugin card per variant', () => {
 
   afterEach(() => {
     act(() => view?.unmount())
+    // The shared store outlives a test: drop its documents and demand so the
+    // next mount reads its own answer.
+    resetQuotaStatusForTesting()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 

@@ -5,6 +5,7 @@ import { FALLBACK_QODER_MODELS } from '../src/catalog.ts'
 import { QoderPluginCard } from '../src/client/QoderPluginCard.tsx'
 import { QoderProbeControl } from '../src/client/QoderProbeControl.tsx'
 import { en } from '../src/client/locales.ts'
+import { resetQuotaStatusForTesting } from '../src/client/quota-settings-store.ts'
 import { QODER_CN_CARD, QODER_GLOBAL_CARD } from '../src/client/QoderPluginCard.tsx'
 
 /**
@@ -118,6 +119,15 @@ function doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 
 let view: ReactTestRenderer | undefined
 
+/**
+ * The shared status store is module state that outlives a test, and an
+ * expanding card no longer re-reads a document that is still fresh — so each
+ * test starts the clock well past the card's minute. A publish inside the
+ * test then lands at the current time and stays fresh, which is what the
+ * dedup assertions read.
+ */
+let clock = Date.parse('2024-05-01T00:00:00.000Z')
+
 async function mountCard(): Promise<void> {
   const props = { t } as unknown as Parameters<typeof QoderPluginCard>[0]
   await act(async () => { view = create(createElement(QoderPluginCard, props)) })
@@ -132,6 +142,9 @@ const pressCard = async (label: string, nth = 0): Promise<void> => {
 }
 
 beforeEach(() => {
+  clock += 10 * 60_000
+  vi.useFakeTimers()
+  vi.setSystemTime(clock)
   calls.length = 0
   hung.clear()
   intervals.clear()
@@ -147,6 +160,10 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => view?.unmount())
+  // The shared store outlives a test: drop its documents and demand so the
+  // next mount reads its own answer.
+  resetQuotaStatusForTesting()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -211,12 +228,24 @@ describe('QoderPluginCard', () => {
       expect(JSON.stringify(view!.toJSON())).toContain(t('creditsUsed', { percent: '99' }))
     })
 
-    it('still stops the poll when the upstream answers signed-out', async () => {
+    it('parks the poll when the upstream answers signed-out', async () => {
+      // The shared ticker owns the poll now, so "stopping" is per variant:
+      // once the document says signed-out, the next tick reads nothing — the
+      // card's demand stays, and a saved PAT's explicit read revives it.
       await mountCard()
-      const handle = [...intervals.keys()][0]!
+      const readsBefore = calls.length
       statusReply = { ok: true, body: { status: 'signed-out' } }
-      await act(async () => { intervals.get(handle)!() })
-      expect(clearedHandles).toContain(handle)
+      await act(async () => { [...intervals.values()][0]!() })
+      expect(JSON.stringify(view!.toJSON())).toContain(en.signedOut)
+
+      const readsAfterSignedOut = calls.length
+      await act(async () => { [...intervals.values()][0]!() })
+      expect(calls.length).toBe(readsAfterSignedOut) // parked: no further read
+      expect(readsAfterSignedOut).toBeGreaterThan(readsBefore) // the parked read itself happened
+
+      // Unmounting the last holder stops the shared ticker.
+      act(() => view?.unmount())
+      expect(clearedHandles.length).toBeGreaterThan(0)
     })
   })
 

@@ -22,6 +22,7 @@
     "tests/client-variants.spec.ts",
     "tests/slot-registration.spec.ts",
     "tests/probe-composer.spec.ts",
-    "tests/unified-card.spec.ts"
+    "tests/unified-card.spec.ts",
+    "tests/quota-poll.spec.ts"
   ]
 }

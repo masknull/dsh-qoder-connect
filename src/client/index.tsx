@@ -25,8 +25,8 @@ import { QuotaDashboard, SidebarQuotaCard } from './SidebarQuotaCard.tsx'
 import type { QuotaDashboardInjected, QuotaDashboardState, QuotaDashboardProps, SidebarQuotaCardInjected, SidebarQuotaCardProps } from './SidebarQuotaCard.tsx'
 import { injectQuotaCss } from './quota-styles.ts'
 import './quota-slots.ts'
-import { setQuotaPollMs, setQuotaToggles, quotaSignInState, quotaPollMs, noteQuotaStatus, quotaStatusIsFresh, variantOfStatusPath } from './quota-settings-store.ts'
-import { isQoderWebStatus } from './status-document.ts'
+import './plugin-manager-slots.ts'
+import { setQuotaPollMs, setQuotaToggles, quotaSignInState, quotaPollMs, quotaStatusIsFresh, acquireLiveSurface, refreshQuotaStatus, variantOfStatusPath } from './quota-settings-store.ts'
 import { en, zh } from './locales.ts'
 import type { QoderSettingsKey } from './locales.ts'
 import { QODER_GLOBAL_STATUS_PATH, QODER_STATUS_PATH } from '../status-paths.ts'
@@ -104,6 +104,21 @@ const SHARED_ITEM_ID = 'dsh-qoder-connect'
 const SHARED_SECTION_LABEL = '插件设置'
 
 /**
+ * The plugin manager's bundle-configuration seat and this bundle's key in it.
+ *
+ * The sidebar's Plugins panel (the `plugins` main panel the Host's plugin
+ * manager registers) renders one bundle's own configuration on the bundle's
+ * detail page — between the description and the component rows — through the
+ * `plugins.bundle.config` keyed slot, keyed by the bundle's npm package name.
+ * The key is what the page's configuration ledger reads to decide whether the
+ * configuration section shows at all, so it must spell this package's name
+ * exactly; the slot itself is declared by the Host (see
+ * `plugin-manager-slots.ts` for the structural restatement).
+ */
+const PLUGIN_MANAGER_SLOT = 'plugins.bundle.config'
+const PLUGIN_MANAGER_KEY = 'dsh-qoder-connect'
+
+/**
  * The shared 《插件设置》 section the 0.1.7 card list lives in.
  *
  * It renders nothing but its child slot: every connect plugin contributes its
@@ -126,7 +141,8 @@ function PluginSettingsSection(
 
 /**
  * Register card copy, the shared quota-settings card, the two variant cards,
- * and the sidebar quota cards.
+ * the sidebar quota cards, and the same unified card on this bundle's page in
+ * the sidebar's Plugins panel.
  *
  * The entire body is wrapped so that a DSH slot-API breaking change (for
  * example the rc.6→rc.7 `id`→`key` / `order`→`priority` rename) degrades
@@ -201,15 +217,25 @@ export function apply(ctx: ClientContext): void {
     // The shared 《插件设置》 block dispatches its `list` entries by id
     // (ascending order); the card rank is fixed across the three connect
     // plugins: the first sibling takes 10, the second 20, this one 30.
-    const registerUnifiedCard = (): (() => void) => {
-      const inject = (): QoderPluginCardInjected => ({
-        t,
-        scope: quotaScope,
-        signedIn: () => quotaSignInState(),
-        unified: true,
-      })
-      return ctx.slots.inject(SHARED_ITEM_SLOT, () => ctx.slots.register({ name: SHARED_ITEM_SLOT, id: SHARED_ITEM_ID, order: 30, inject }, QoderPluginCard))
-    }
+    /**
+     * The unified card's inject face, shared by its two surfaces: the shared
+     * 《插件设置》 block and this bundle's own page in the sidebar's Plugins
+     * panel. One face keeps both cards reading the same live values — the same
+     * scope, the same sign-in fact, the same `unified` layout — so a save on
+     * either surface is a save for both. The Plugins-panel registration opens
+     * the card at once; the settings block lists it collapsed.
+     */
+    const unifiedCardInject = (defaultOpen = false): QoderPluginCardInjected => ({
+      t,
+      // Read live at render: the sign-in state changes without a remount.
+      signedIn: () => quotaSignInState(),
+      scope: quotaScope,
+      unified: true,
+      defaultOpen,
+    })
+
+    const registerUnifiedCard = (): (() => void) =>
+      ctx.slots.inject(SHARED_ITEM_SLOT, () => ctx.slots.register({ name: SHARED_ITEM_SLOT, id: SHARED_ITEM_ID, order: 30, inject: unifiedCardInject }, QoderPluginCard))
 
     /**
      * Attach this plugin's card to the shared 《插件设置》 block, building the
@@ -253,6 +279,36 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
+     * Contribute the same unified card to this bundle's page in the sidebar's
+     * Plugins panel, beside its enable switch and component rows.
+     *
+     * `ctx.slots.inject` defers the factory until the Host's plugin manager
+     * declares the seat (its `main` registration commits the child table), so
+     * a deployment that ships no plugin manager — or loads it after this
+     * bundle — never throws: the callback simply never runs, and the shared
+     * 《插件设置》 block stays the single surface, exactly as before. The
+     * keyed key is this package's name, the same key the page's configuration
+     * ledger reads to decide whether the configuration section shows.
+     *
+     * Its own boundary mirrors the dashboard and footer-card ones: a slot-API
+     * breaking change degrades to a console.error instead of taking the
+     * settings block or the model channel with it.
+     */
+    const joinPluginManagerBlock = (): void => {
+      try {
+        ctx.slots.inject(PLUGIN_MANAGER_SLOT, () => ctx.slots.register({
+          name: PLUGIN_MANAGER_SLOT,
+          key: PLUGIN_MANAGER_KEY,
+          // The bundle's page in the Plugins panel has room for the whole
+          // configuration, so the card opens expanded there.
+          inject: () => unifiedCardInject(true),
+        }, QoderPluginCard))
+      } catch (error: unknown) {
+        console.error('[dsh-qoder-connect] could not join the plugin manager page:', error)
+      }
+    }
+
+    /**
      * 插件自有配置（`<profile>/.dsh-qoder-connect/settings.json`）：两条宿主线的
      * 读写都走宿主半的 settings face，不再经过 settingsScope / configForms。
      *
@@ -264,6 +320,7 @@ export function apply(ctx: ClientContext): void {
     void ownQuotaScope.load()
     adoptQuotaScope(ownQuotaScope as unknown as QuotaSettingsScope<QuotaSection>)
     joinSharedSettingsBlock()
+    joinPluginManagerBlock()
 
     // Sidebar quota cards + the dashboard they open. Two registrations, one
     // navigation entry — commandcode's pattern: the layout's keyed `main` slot
@@ -279,8 +336,6 @@ export function apply(ctx: ClientContext): void {
     }
 
     // ---- dashboard state (module-closure, read by both the face and open()) ----
-    const dashboardDocuments: { cn: QoderWebStatus | undefined; global: QoderWebStatus | undefined } = { cn: undefined, global: undefined }
-    let dashboardFetchedAt: number | undefined
     let dashboardLoading = false
     let dashboardRequestedPath: string = QODER_STATUS_PATH
     /** Whether the dashboard is the CURRENT center panel (its mount owns this). */
@@ -304,15 +359,11 @@ export function apply(ctx: ClientContext): void {
      * mutator builds the next snapshot and publishes exactly once.
      */
     let dashboardSnap: QuotaDashboardState = {
-      documents: [undefined, undefined],
-      fetchedAt: undefined,
       loading: false,
       activePath: QODER_STATUS_PATH,
     }
     const rebuildSnapshot = (): void => {
       const next: QuotaDashboardState = {
-        documents: [dashboardDocuments.cn, dashboardDocuments.global],
-        fetchedAt: dashboardFetchedAt,
         loading: dashboardLoading,
         activePath: dashboardRequestedPath,
       }
@@ -347,6 +398,12 @@ export function apply(ctx: ClientContext): void {
      * variant with NO result yet always fetches. A manual Refresh click
      * (force=true) bypasses the freshness check: an explicit user action
      * always re-reads.
+     *
+     * The read itself is the SHARED one: it publishes through the store's
+     * sequence guard, so this panel, the sidebar cards and the settings cards
+     * converge on the same document — and a settings card polling the variant
+     * already keeps this panel current, which is why the panel no longer
+     * keeps a timer of its own.
      */
     const refreshDashboard = async (options: { force?: boolean } = {}): Promise<void> => {
       if (dashboardLoading) return
@@ -355,43 +412,28 @@ export function apply(ctx: ClientContext): void {
       dashboardLoading = true
       rebuildSnapshot()
       try {
-        const result = await fetchStatusDocument(variantId === 'qoder' ? QODER_STATUS_PATH : QODER_GLOBAL_STATUS_PATH)
-        // Publish through the SHARED store: the sidebar cards and the settings
-        // toggles read the same documents, so one refresh updates every
-        // surface AT WHICH IT IS SHOWN — and only that variant's document.
-        if (result !== undefined) noteQuotaStatus(variantId, result)
-        dashboardFetchedAt = Date.now()
+        await refreshQuotaStatus(variantId)
       } finally {
         dashboardLoading = false
         rebuildSnapshot()
       }
     }
 
-    let dashboardTimer: number | undefined
-    const startDashboardPoll = (): void => {
-      if (dashboardTimer !== undefined) return
-      void refreshDashboard()
-      dashboardTimer = window.setInterval(() => {
-        if (document.hidden) return
-        // Interval ticks honour the freshness rule too: a tick within the
-        // interval of the last read is a no-op, not a fetch.
-        void refreshDashboard()
-      }, Math.max(60_000, quotaPollMs()))
+    /**
+     * The panel's hold on its shown variant. The hold is what keeps the
+     * variant live: the shared ticker reads it at the settings interval while
+     * the panel stands — the cadence the panel's own timer used to keep — and
+     * an expanded settings card beside it tightens the read to once a minute.
+     * A variant switch moves the hold to the newly shown variant.
+     */
+    let dashboardHold: (() => void) | undefined
+    const holdDashboardVariant = (path: string): void => {
+      dashboardHold?.()
+      dashboardHold = acquireLiveSurface(variantOfStatusPath(path))
     }
-    const stopDashboardPoll = (): void => {
-      if (dashboardTimer === undefined) return
-      window.clearInterval(dashboardTimer)
-      dashboardTimer = undefined
-    }
-
-    async function fetchStatusDocument(path: string): Promise<QoderWebStatus | undefined> {
-      try {
-        const response = await fetch(path, { headers: { accept: 'application/json' } })
-        const body: unknown = await response.json()
-        return response.ok && isQoderWebStatus(body) ? body : undefined
-      } catch {
-        return undefined
-      }
+    const releaseDashboardVariant = (): void => {
+      dashboardHold?.()
+      dashboardHold = undefined
     }
 
     // Mount/unmount wrapper. A FUNCTION DECLARATION, defined before the
@@ -406,10 +448,14 @@ export function apply(ctx: ClientContext): void {
     function QuotaDashboardWithLifecycle(props: QuotaDashboardProps): React.ReactNode {
       useEffect(() => {
         quotaPanelOpen = true
-        startDashboardPoll()
+        // The panel holds its shown variant live and reads it at once (the
+        // freshness rule may serve the cached document); the shared ticker
+        // keeps it current from then on.
+        holdDashboardVariant(dashboardRequestedPath)
+        void refreshDashboard()
         return () => {
           quotaPanelOpen = false
-          stopDashboardPoll()
+          releaseDashboardVariant()
         }
       }, [])
       return <QuotaDashboard {...props} />
@@ -430,13 +476,14 @@ export function apply(ctx: ClientContext): void {
         // bypasses the freshness rule and re-reads the SHOWN variant only.
         void refreshDashboard({ force: true })
       },
-      // The user switched to another variant's tab: point the dashboard at it
-      // and fetch that variant when the shared store holds nothing for it (or
-      // something stale). Its sidebar card being off means no other surface
-      // ever fetched it, so without this the tab showed "save a PAT" until the
-      // user toggled a setting.
+      // The user switched to another variant's tab: point the dashboard at it,
+      // move the panel's hold to it, and fetch that variant when the shared
+      // store holds nothing for it (or something stale). Its sidebar card
+      // being off means no other surface ever fetched it, so without this the
+      // tab showed "save a PAT" until the user toggled a setting.
       onVariantPicked: (path: string) => {
         dashboardRequestedPath = path
+        holdDashboardVariant(path)
         notifyDashboard()
         void refreshDashboard()
       },

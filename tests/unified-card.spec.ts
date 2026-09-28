@@ -6,7 +6,7 @@ import { QuotaSettingsContent } from '../src/client/QuotaSettingsCard.tsx'
 import { SidebarQuotaCard } from '../src/client/SidebarQuotaCard.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import type { QoderSettingsKey } from '../src/client/locales.ts'
-import { noteQuotaSignIn, noteQuotaStatus, setQuotaToggles } from '../src/client/quota-settings-store.ts'
+import { noteQuotaSignIn, noteQuotaStatus, resetQuotaStatusForTesting, setQuotaToggles } from '../src/client/quota-settings-store.ts'
 import { QODER_AUTH_PATH, QODER_GLOBAL_AUTH_PATH, QODER_GLOBAL_STATUS_PATH, QODER_STATUS_PATH } from '../src/status-paths.ts'
 
 const t = (key: QoderSettingsKey, params: Record<string, unknown> = {}): string =>
@@ -15,12 +15,24 @@ const t = (key: QoderSettingsKey, params: Record<string, unknown> = {}): string 
     en[key] as string,
   )
 
+/**
+ * The shared status store is module state that outlives a test, and an
+ * expanding card no longer re-reads a document that is still fresh — so each
+ * test starts the clock well past the card's minute. A publish inside the
+ * test then lands at the current time and stays fresh, which is what the
+ * dedup assertions read.
+ */
+let clock = Date.parse('2024-05-01T00:00:00.000Z')
+
 describe('Unified Qoder Plugin Card', () => {
   let view: ReactTestRenderer | undefined
   const request = vi.fn()
   const postedActions: { url: string; body: unknown }[] = []
 
   beforeEach(() => {
+    clock += 10 * 60_000
+    vi.useFakeTimers()
+    vi.setSystemTime(clock)
     postedActions.length = 0
     request.mockReset().mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {
@@ -76,6 +88,10 @@ describe('Unified Qoder Plugin Card', () => {
     setQuotaToggles(false, false)
     noteQuotaSignIn('qoder', false)
     noteQuotaSignIn('qoder-global', false)
+    // The shared store outlives a test: drop its documents and demand so the
+    // next mount reads its own answer.
+    resetQuotaStatusForTesting()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
