@@ -820,6 +820,39 @@ describe('probeEffort', () => {
     expect(attempt.detail!.length).toBeLessThanOrEqual(300)
   })
 
+  it('attributes an effort the endpoint itself refused to the same code', async () => {
+    // Qoder's own answer to an impossible spelling: a 400 whose nested error
+    // names the offending parameter. Left under INVALID_REQUEST the sweep would
+    // read it as an unattributable failure and report "unknown" instead.
+    const body = 'Qoder service returned upstream error status 400: '
+      + '{"code":"provider_error","type":"provider_error","request_id":"898ef59e",'
+      + '"details":"data: {\\"error\\":{\\"code\\":\\"invalid_parameter_error\\",'
+      + '\\"param\\":null,\\"message\\":\\"\'reasoning_effort\' is not a valid parameter\\"}}"}'
+    const { client } = makeClient({
+      throwAt: 'stream',
+      error: new QoderLlmError(body, 'INVALID_REQUEST', { status: 400 }),
+    })
+    const attempt = await client.probeEffort('qmodel', 'probe_sentinel_deadbeef', new AbortController().signal)
+    expect(attempt.status).toBe(400)
+    expect(attempt.streamed).toBe(false)
+    expect(attempt.errorCode).toBe('UNSUPPORTED_REASONING_EFFORT')
+  })
+
+  it('leaves a 400 that does not blame reasoning_effort under its own code', async () => {
+    // Only one marker present: a different parameter problem must not be
+    // recorded as a rejected level.
+    const { client } = makeClient({
+      throwAt: 'stream',
+      error: new QoderLlmError(
+        'Qoder 400: {"details":"{\\"error\\":{\\"code\\":\\"invalid_parameter_error\\"}}"}',
+        'INVALID_REQUEST',
+        { status: 400 },
+      ),
+    })
+    const attempt = await client.probeEffort('qmodel', 'low', new AbortController().signal)
+    expect(attempt.errorCode).toBe('INVALID_REQUEST')
+  })
+
   it('counts an accepted value as one streamed request, ended at the first chunk', async () => {
     const { client, fake } = makeClient({ chunks: [{ type: 'block-start', index: 0, blockType: 'text' }, { type: 'finish', reason: { kind: 'stop' } }] })
     const attempt = await client.probeEffort('ultimate', 'high', new AbortController().signal)

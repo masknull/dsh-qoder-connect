@@ -74,17 +74,14 @@ export type ProbeOutcome =
   | { validation: 'unknown'; efforts: readonly []; requests: number; reason: string }
 
 /**
- * The transport's rejection code for an effort the model does not advertise
- * (`src/qoder/transport/wire/serialize.ts`).
+ * The code a refused effort arrives under, wherever it was refused
+ * (`src/qoder/transport/wire/serialize.ts` for a declared row, `probeEffort`
+ * for a refusal the endpoint issued itself).
  *
- * With the Qoder upstream this rejection is raised *locally* against the
- * discovery catalog before any network call: a probe therefore measures the
- * catalog's declaration as much as the endpoint behind it. That is a weaker
- * finding than the WorkBuddy-era one, and it is what the plan's Stage D will
- * weigh; the sequence below still distinguishes "advertises and validates"
- * (per-level refusals after an accepted baseline) from "accepts anything the
- * catalog does not name" — the sentinel answers that question against the
- * same vocabulary the request path will later enforce.
+ * Only a row that declares efforts can be refused locally. An undeclared row —
+ * the only kind a sweep is offered for — sends every candidate to the wire and
+ * lets the sentinel measure the endpoint rather than this plugin's own reading
+ * of the catalog.
  */
 const INVALID_EFFORT_CODE = 'UNSUPPORTED_REASONING_EFFORT'
 

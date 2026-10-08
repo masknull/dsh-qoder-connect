@@ -51,7 +51,16 @@ export function validateQoderRequestShape(
 ): void {
   if (options.reasoningEffort !== undefined) {
     const effort = String(options.reasoningEffort)
-    if (!model?.reasoningEfforts?.some(candidate => candidate.id === effort)) {
+    // Only a declaration can justify a local refusal. A row that declares no
+    // efforts at all is not evidence that the model supports none: the upstream
+    // accepts spellings its discovery catalog never lists, so refusing them here
+    // misreports a supported value as unsupported. It also made detection
+    // impossible — every probe candidate, sentinel included, was rejected before
+    // the wire, which is why an undeclared model could only ever come back as
+    // "validating with no levels". An undeclared row therefore goes to the
+    // upstream for the answer; a declared set stays enforced exactly as before.
+    const declared = model?.reasoningEfforts
+    if (declared !== undefined && declared.length > 0 && !declared.some(candidate => candidate.id === effort)) {
       throw new QoderLlmError(
         `Qoder model "${options.model}" does not advertise reasoning effort "${effort}".`,
         'UNSUPPORTED_REASONING_EFFORT',

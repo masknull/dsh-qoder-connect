@@ -399,6 +399,24 @@ test('buildQoderRequestBody accepts only advertised reasoning efforts', async ()
   )
 })
 
+test('buildQoderRequestBody sends an effort the catalog does not declare', async () => {
+  // An undeclared row is not evidence that the value is unsupported: the
+  // upstream accepts spellings its catalog never lists. Refusing these locally
+  // misreported a working value, and it made every probe candidate — sentinel
+  // included — fail before the wire, so detection could only ever answer
+  // "validating" with no levels.
+  const options = {
+    provider: 'qoder',
+    model: 'qmodel',
+    reasoningEffort: ReasoningEffortId('low'),
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'Ping' }], source: { kind: 'user' } })],
+  } as GenerateOptions
+  const model = { id: 'qmodel', name: 'Qwen3.7-Plus', isReasoning: true }
+  const body = await buildQoderRequestBody(options, 'user-42', undefined, model)
+  assert.equal(body.parameters.reasoning_effort, 'low')
+  assert.equal(body.model_config.is_reasoning, true)
+})
+
 function stubUploader(url = 'https://oss.qoder.sh/published.png'): {
   uploader: QoderImageResolver
   calls: number

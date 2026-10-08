@@ -905,13 +905,14 @@ export class QoderUpstreamClient {
   /**
    * One minimal reasoning-effort request, as the probe sweep needs it.
    *
-   * The transport validates `reasoningEffort` against the model's advertised
-   * efforts **locally** before any network call: a rejection therefore reads
-   * as an attributable 400 with code `UNSUPPORTED_REASONING_EFFORT`, and an
-   * accepted value costs exactly one streamed request, which this method ends
-   * after the first chunk arrives. A probe on this upstream measures the
-   * discovery catalog as much as the endpoint behind it — see the module docs
-   * in `probe.ts`.
+   * A row that declares efforts is still checked locally, so an unlisted value
+   * costs no request. A row that declares none — the only kind detection is
+   * offered for — sends the value to the upstream and waits for its answer,
+   * because the endpoint is the only authority on spellings the catalog never
+   * lists. Either refusal is reported as an attributable 400 with code
+   * `UNSUPPORTED_REASONING_EFFORT`, and an accepted value costs exactly one
+   * streamed request, which this method ends after the first chunk arrives —
+   * see the module docs in `probe.ts`.
    */
   async probeEffort(model: string, effort: string | undefined, signal: AbortSignal): Promise<ProbeAttempt> {
     try {
@@ -941,11 +942,32 @@ export class QoderUpstreamClient {
     } catch (error) {
       if (error instanceof LlmError) {
         const status = error.failure.status ?? defaultStatusForProbe(error.failure.code)
-        return { status, streamed: false, errorCode: error.failure.code, detail: error.failure.message.slice(0, 300) }
+        // A refusal the endpoint itself issued must reach the sweep under the
+        // same code as one refused locally, or the sweep reads it as an
+        // unattributable failure and reports `unknown` instead of a finding.
+        // Classify from the full message, before `detail` is capped: both
+        // markers sit far enough into Qoder's error body that the cap can cut
+        // them off.
+        const code = status === 400 && blamesReasoningEffort(error.failure.message)
+          ? 'UNSUPPORTED_REASONING_EFFORT'
+          : error.failure.code
+        return { status, streamed: false, errorCode: code, detail: error.failure.message.slice(0, 300) }
       }
       return { status: 0, streamed: false, detail: `transport error: ${String(error)}` }
     }
   }
+}
+
+/**
+ * Whether an upstream 400 blames the `reasoning_effort` value it was sent.
+ *
+ * Qoder answers an impossible effort with a `provider_error` body whose nested
+ * error names `invalid_parameter_error` and quotes `reasoning_effort`. Both
+ * markers are required: a 400 naming only one of them is some other parameter
+ * problem, and the sweep must not record it as a rejected level.
+ */
+function blamesReasoningEffort(message: string): boolean {
+  return message.includes('invalid_parameter_error') && message.includes('reasoning_effort')
 }
 
 /** Statuses {@link probeEffort} reports for failures the transport raised pre-network. */

@@ -942,13 +942,14 @@ declare class QoderUpstreamClient {
   /**
    * One minimal reasoning-effort request, as the probe sweep needs it.
    *
-   * The transport validates `reasoningEffort` against the model's advertised
-   * efforts **locally** before any network call: a rejection therefore reads
-   * as an attributable 400 with code `UNSUPPORTED_REASONING_EFFORT`, and an
-   * accepted value costs exactly one streamed request, which this method ends
-   * after the first chunk arrives. A probe on this upstream measures the
-   * discovery catalog as much as the endpoint behind it — see the module docs
-   * in `probe.ts`.
+   * A row that declares efforts is still checked locally, so an unlisted value
+   * costs no request. A row that declares none — the only kind detection is
+   * offered for — sends the value to the upstream and waits for its answer,
+   * because the endpoint is the only authority on spellings the catalog never
+   * lists. Either refusal is reported as an attributable 400 with code
+   * `UNSUPPORTED_REASONING_EFFORT`, and an accepted value costs exactly one
+   * streamed request, which this method ends after the first chunk arrives —
+   * see the module docs in `probe.ts`.
    */
   probeEffort(model: string, effort: string | undefined, signal: AbortSignal): Promise<ProbeAttempt>;
 }
