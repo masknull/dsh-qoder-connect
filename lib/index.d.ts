@@ -773,8 +773,15 @@ interface QoderTransport {
  */
 type QoderEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 /** How the shim should present an upstream failure to its OpenAI client. */
-type UpstreamErrorKind = 'missing_credential' | 'auth' | 'soft_rate' | 'quota_exceeded' | 'server' | 'client';
-/** HTTP status the shim answers each failure kind with. */
+type UpstreamErrorKind = 'missing_credential' | 'auth' | 'soft_rate' | 'quota_exceeded' | 'timeout' | 'server' | 'client';
+/**
+ * HTTP status the shim answers each failure kind with.
+ *
+ * `timeout` is 408 and deliberately not 504: the harness's pi-ai classifier tests
+ * `/\b5\d\d\b/` *before* its `timeout` test, so a 5xx status would be read as
+ * SERVER no matter what the message says. 408 is also the honest answer for a
+ * request the upstream never completed.
+ */
 declare const KIND_STATUS: Readonly<Record<UpstreamErrorKind, number>>;
 /** The chat-completions answer: a streaming `Response`, or a classified failure. */
 type QoderChatResult = {
@@ -840,6 +847,12 @@ declare function classifyUpstreamError(status: number, body: string): UpstreamEr
  * `code: RATE_LIMIT, status: 403` (body carries 10605/isQueued/
  * retryAfterSeconds), and letting the status arm claim it reported a dead
  * credential — which the host never retries — instead of a throttle it would.
+ *
+ * `QUOTA` and the request family are tested before the auth family for the same
+ * reason: both keep the upstream's 401/403 (see `qoderHttpError`), and the status
+ * arm would call a spent daily window or a refused request a credential
+ * rejection. `status === 402` is tested before the request arm so that a 402 the
+ * transport coded `INVALID_REQUEST` (its 4xx fallback) still reads as a quota.
  */
 declare function kindFromQoderFailure(failure: {
   code: string;

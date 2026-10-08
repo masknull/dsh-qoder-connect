@@ -319,7 +319,7 @@ describe('kindFromQoderFailure and classifyUpstreamError', () => {
     expect(kindFromQoderFailure({ code: 'INVALID_IMAGE', status: 415 })).toBe('client')
     expect(kindFromQoderFailure({ code: 'UNSUPPORTED_REASONING_EFFORT' })).toBe('client')
     expect(kindFromQoderFailure({ code: 'ATTACHMENT' })).toBe('client')
-    expect(kindFromQoderFailure({ code: 'TIMEOUT' })).toBe('server')
+    expect(kindFromQoderFailure({ code: 'TIMEOUT' })).toBe('timeout')
     expect(kindFromQoderFailure({ code: 'WEIRD_NEW_THING' })).toBe('server')
   })
 
@@ -335,9 +335,72 @@ describe('kindFromQoderFailure and classifyUpstreamError', () => {
     expect(kindFromQoderFailure({ code: 'AUTH', status: 403 })).toBe('auth')
   })
 
+  it('routes a QUOTA code to quota_exceeded even with a 401/403 status', () => {
+    // The second half of #10. The transport now codes a documented quota answer
+    // QUOTA while keeping the upstream's 403, so the auth arm — which tests the
+    // status — would still claim it first and the shim would answer 401
+    // "auth": the same "API 密钥无效" the transport-side fix exists to remove.
+    expect(kindFromQoderFailure({ code: 'QUOTA', status: 403 })).toBe('quota_exceeded')
+    expect(kindFromQoderFailure({ code: 'QUOTA', status: 401 })).toBe('quota_exceeded')
+    expect(kindFromQoderFailure({ code: 'ACCOUNT_QUOTA', status: 403 })).toBe('quota_exceeded')
+    expect(kindFromQoderFailure({ code: 'QUOTA' })).toBe('quota_exceeded')
+    // A genuine authorization failure is still unchanged by the new arm.
+    expect(kindFromQoderFailure({ code: 'AUTH', status: 401 })).toBe('auth')
+  })
+
+  it('routes a request-family failure to client even with a 401/403 status', () => {
+    // The same trap as #10, one family over: the transport now codes a documented
+    // request/policy answer INVALID_REQUEST while keeping the upstream's 403, and
+    // the auth arm would still claim it by status.
+    expect(kindFromQoderFailure({ code: 'INVALID_REQUEST', status: 403 })).toBe('client')
+    expect(kindFromQoderFailure({ code: 'UNSUPPORTED_CONTENT', status: 403 })).toBe('client')
+    // Quota still outranks the request arm.
+    expect(kindFromQoderFailure({ code: 'INVALID_REQUEST', status: 402 })).toBe('quota_exceeded')
+    // Genuine authorization failures are untouched.
+    expect(kindFromQoderFailure({ code: 'AUTH', status: 403 })).toBe('auth')
+    expect(kindFromQoderFailure({ code: 'SERVER', status: 401 })).toBe('auth')
+  })
+
+  it('keeps a transport timeout distinct from a server fault', () => {
+    // A timeout used to fall through to the server catch-all, so the shim answered
+    // 502 with kind "server" and pi-ai reported SERVER for a stalled request.
+    expect(kindFromQoderFailure({ code: 'TIMEOUT' })).toBe('timeout')
+    expect(kindFromQoderFailure({ code: 'TIMEOUT', status: 408 })).toBe('timeout')
+    expect(kindFromQoderFailure({ code: 'SERVER', status: 502 })).toBe('server')
+    // 408, not 504: pi-ai tests /\b5\d\d\b/ *before* its timeout test, so a 5xx
+    // status would read as SERVER no matter what the wording says.
+    expect(KIND_STATUS.timeout).toBe(408)
+  })
+
+  it('reads a documented request code out of the body ahead of the 401/403 status', () => {
+    const refusal = '{"code":"406","message":"Request blocked because of sensitive content"}'
+    expect(classifyUpstreamError(403, refusal)).toBe('client')
+    expect(classifyUpstreamError(401, '{"code":"80411","message":"Input content is too long"}')).toBe('client')
+    // A 403 naming no documented code is still an authorization failure.
+    expect(classifyUpstreamError(403, '{"message":"blocked"}')).toBe('auth')
+  })
+
+  it('reads a documented quota code out of the body ahead of the 401/403 status', () => {
+    // The issue-#10 answer verbatim: HTTP 403 whose body names code 110.
+    const body = '{"code":"110","message":"Billing daily count exceeded"}'
+    expect(classifyUpstreamError(403, body)).toBe('quota_exceeded')
+    expect(classifyUpstreamError(401, body)).toBe('quota_exceeded')
+    // Qoder double-encodes, so the code sits behind escaped JSON.
+    const nested = JSON.stringify({ code: '113', message: JSON.stringify({ usage: 'exhausted' }) })
+    expect(classifyUpstreamError(403, nested)).toBe('quota_exceeded')
+    // 105 is the one documented code in the auth family, and stays auth.
+    expect(classifyUpstreamError(401, '{"code":"105","message":"token expired"}')).toBe('auth')
+
+    // Status-first is otherwise intact: a 403 whose body names no documented
+    // code is still an authorization failure, so a throttling answer that merely
+    // says "quota exceeded" is never parked as an exhausted balance.
+    expect(classifyUpstreamError(403, '{"message":"quota exhausted"}')).toBe('auth')
+    expect(classifyUpstreamError(403, '{"code":403,"message":"quota exhausted"}')).toBe('auth')
+  })
+
   it('reads an HTTP answer status-first, then body markers', () => {
     expect(KIND_STATUS).toEqual({
-      missing_credential: 401, auth: 401, soft_rate: 429, quota_exceeded: 402, server: 502, client: 400,
+      missing_credential: 401, auth: 401, soft_rate: 429, quota_exceeded: 402, timeout: 408, server: 502, client: 400,
     })
     expect(classifyUpstreamError(429, 'quota exceeded, rate limit')).toBe('soft_rate')
     expect(classifyUpstreamError(402, 'you have hit a rate limit')).toBe('quota_exceeded')

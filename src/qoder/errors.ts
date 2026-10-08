@@ -5,6 +5,7 @@
  */
 
 import { LlmError, ProviderRequestId, type LlmErrorOptions } from '@deepseek-ai/dsh-llm'
+import { qoderResultCode } from './codes.ts'
 
 export class QoderLlmError extends LlmError {
   constructor(message: string, code: string = 'UNKNOWN_ERROR', options?: LlmErrorOptions) {
@@ -54,18 +55,25 @@ export function qoderQueueSignal(body: string | undefined): { retryAfterMs?: num
 
 /**
  * Replace status digits that read as authorization failure with a neutral
- * word, for messages the upstream used to announce a queue.
+ * word, for messages the upstream used to announce something other than a dead
+ * credential.
  *
  * `dsh-llm-pi-ai`'s error classifier is a text matcher whose first test is
- * `/\b(?:401|403)\b/` — ahead of its 429/rate-limit test — so any message
- * carrying those digits classifies AUTH no matter the structured code
- * travelling beside it. A queue answer quoting the upstream's 403 (in the
- * message prefix, the envelope status, or the body's `"code":"403"`) must not
- * reach that matcher as-is, or the user sees "API 密钥无效" for a throttle
- * (observed verbatim on 2026-09-26 23:30 and again at 23:40).
+ * `/\b(?:401|403)\b/` — ahead of its 429/rate-limit test and ahead of every
+ * quota test — so any message carrying those digits classifies AUTH no matter
+ * the structured code travelling beside it. An answer that is really a
+ * throttle or an exhausted quota must not reach that matcher as-is, or the user
+ * sees "API 密钥无效" for a limit that clears on its own (observed verbatim on
+ * 2026-09-26 23:30 and again at 23:40 for the queue; reproduced 2026-10-08 for
+ * the daily counter reported in #10).
+ *
+ * @param message - the message to neutralize.
+ * @param replacement - the neutral word substituted for the digits. `throttled`
+ *   for the queue answer, whose wording users and tests already know; `limited`
+ *   for a quota answer, which is not a throttle.
  */
-function deauthorizeDigits(message: string): string {
-  return message.replace(/\b(?:401|403)\b/gu, 'throttled')
+function deauthorizeDigits(message: string, replacement = 'throttled'): string {
+  return message.replace(/\b(?:401|403)\b/gu, replacement)
 }
 
 export function qoderHttpError(
@@ -99,6 +107,42 @@ export function qoderHttpError(
       ...requestId === undefined ? {} : { requestId },
     })
   }
+  // A documented quota code is the one thing HTTP status cannot express. Qoder
+  // answers an exhausted daily billing counter with 403 `{"code":"110",
+  // "message":"Billing daily count exceeded"}`, which the status arm below would
+  // read as a dead credential (#10): the user was told the PAT was revoked, a
+  // fresh job token was exchanged that no token can fix, and the real cause — a
+  // counter that resets the next day — was never shown.
+  //
+  // The code has the last word here regardless of status, for the same reason
+  // `RATE_LIMIT` is exempted from the status arms below: the body is the only
+  // place the distinction is visible. Only a *documented* code counts, so a 403
+  // whose mirrored `code` field is the status itself, or whose prose merely
+  // mentions a quota, still routes by status — a throttling answer that happens
+  // to say "quota exceeded" must never be parked as an exhausted balance.
+  const documented = qoderResultCode(body ?? message)
+  if (documented?.family === 'quota') {
+    // No `providerRetryAfterMs`: a spent daily window is not a "try again in N
+    // seconds" hint, and the host's retry policy never retries QUOTA.
+    return new QoderLlmError(deauthorizeDigits(message, 'limited'), 'QUOTA', {
+      status,
+      ...requestId === undefined ? {} : { requestId },
+    })
+  }
+  // The same trap one family over: Qoder can name a request/policy code
+  // (406/416/430/80411/80412) while answering 401/403, and the status arm below
+  // would report "API 密钥无效" for a content refusal or an over-long input. pi-ai
+  // has no code for either — its vocabulary stops at INVALID_REQUEST — so a
+  // request failure is the honest floor.
+  //
+  // Only the trap is corrected: a 4xx status already reads as a request failure
+  // on its own, and no other status has been observed carrying these codes.
+  if (documented?.family === 'request' && (status === 401 || status === 403)) {
+    return new QoderLlmError(deauthorizeDigits(message, 'rejected'), 'INVALID_REQUEST', {
+      status,
+      ...requestId === undefined ? {} : { requestId },
+    })
+  }
   const code = status === 401 || status === 403
     ? 'AUTH'
     : status === 408
@@ -126,6 +170,21 @@ export function qoderRequestId(headers?: Pick<Headers, 'get'>): ReturnType<typeo
 }
 
 /**
+ * Codes that keep the upstream's 401/403 status without being credential
+ * rejections, so the status arm of {@link isQoderAuthRejection} must not claim
+ * them.
+ *
+ * `RATE_LIMIT` is the queue answer (code 10605 / isQueued / retryAfterSeconds)
+ * and `QUOTA`/`ACCOUNT_QUOTA` is a spent usage window (#10, e.g. code 110 with
+ * `Billing daily count exceeded`). Both arrive as 401/403 and neither is fixed
+ * by a fresh job token — the queue cannot be jumped and a quota cannot be
+ * exchanged away — so healing either one spends an exchange and suppresses the
+ * retry that would actually help (the queue) or reports a failure notice for a
+ * condition that clears on its own (the quota).
+ */
+const NON_AUTH_STATUS_CODES: readonly string[] = ['RATE_LIMIT', 'QUOTA', 'ACCOUNT_QUOTA']
+
+/**
  * Whether this failure is an upstream authorization rejection worth one
  * re-auth retry.
  *
@@ -136,16 +195,16 @@ export function qoderRequestId(headers?: Pick<Headers, 'get'>): ReturnType<typeo
  * exchange, so callers clear their credential cache and retry once before
  * reporting `AUTH` to the user.
  *
- * A `RATE_LIMIT` code is never a re-auth candidate, **even when its status is
- * 401/403**: that is the upstream's queue answer (code 10605 / isQueued /
- * retryAfterSeconds in the body), which keeps the status but says the
- * credential was not the problem. Healing it exchanged job tokens against a
- * queue no token can jump (observed 2026-09-26) and, by consuming the retry,
- * suppressed the rate-limit retry that would have ridden out the window.
+ * A code in {@link NON_AUTH_STATUS_CODES} is never a re-auth candidate, **even
+ * when its status is 401/403**: those answers keep the status while saying the
+ * credential was not the problem. Healing one exchanged job tokens against a
+ * condition no token can change (observed 2026-09-26 for the queue, and again
+ * 2026-10-08 for the daily counter), and by consuming the retry it suppressed
+ * the rate-limit retry that would have ridden out the window.
  */
 export function isQoderAuthRejection(error: unknown): error is LlmError {
   if (!(error instanceof LlmError)) return false
-  if (error.code === 'RATE_LIMIT') return false
+  if (NON_AUTH_STATUS_CODES.includes(error.code)) return false
   return error.code === 'AUTH' || error.failure.status === 401 || error.failure.status === 403
 }
 

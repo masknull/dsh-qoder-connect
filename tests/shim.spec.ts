@@ -407,6 +407,7 @@ describe('Qoder shim error mapping', () => {
       auth: 401,
       soft_rate: 429,
       quota_exceeded: 402,
+      timeout: 408,
       server: 502,
       client: 400,
     })

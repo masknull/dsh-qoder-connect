@@ -45,6 +45,7 @@ import type { QoderCatalogModel } from './qoder/catalog.ts'
 import type { QoderRegion } from './qoder/region.ts'
 import type { QoderAccountInfo, QoderQuotaUsage } from './qoder/account.ts'
 import { qoderQueueSignal } from './qoder/errors.ts'
+import { qoderResultCode } from './qoder/codes.ts'
 import { createQoderTransport, type QoderCheckInResult, type QoderTransport } from './qoder/transport/index.ts'
 import type { QoderModelBilling, QoderModelInfo, QoderModelReasoning } from './catalog.ts'
 
@@ -62,15 +63,24 @@ export type UpstreamErrorKind =
   | 'auth'
   | 'soft_rate'
   | 'quota_exceeded'
+  | 'timeout'
   | 'server'
   | 'client'
 
-/** HTTP status the shim answers each failure kind with. */
+/**
+ * HTTP status the shim answers each failure kind with.
+ *
+ * `timeout` is 408 and deliberately not 504: the harness's pi-ai classifier tests
+ * `/\b5\d\d\b/` *before* its `timeout` test, so a 5xx status would be read as
+ * SERVER no matter what the message says. 408 is also the honest answer for a
+ * request the upstream never completed.
+ */
 export const KIND_STATUS: Readonly<Record<UpstreamErrorKind, number>> = {
   missing_credential: 401,
   auth: 401,
   soft_rate: 429,
   quota_exceeded: 402,
+  timeout: 408,
   server: 502,
   client: 400,
 }
@@ -136,6 +146,21 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   // host retries soft_rate and honors retryAfterSeconds, while 'auth' would
   // park the account until the user intervenes.
   if (qoderQueueSignal(body) !== undefined) return 'soft_rate'
+  // A *documented* quota code outranks the status arms below. Qoder answers a
+  // spent daily window with HTTP 403 `{"code":"110","message":"Billing daily
+  // count exceeded"}`, which the status alone reads as a dead credential (#10).
+  // The numeric code is the only signal that separates the two, and status-first
+  // cannot: the caution the arms below encode — a throttling body often also says
+  // "quota exceeded" — is about *prose*, and it still holds for every body that
+  // names no code.
+  const documented = qoderResultCode(body)
+  if (documented?.family === 'quota') return 'quota_exceeded'
+  // A documented request/policy code is the same shape of answer: Qoder can name
+  // 406/80411 while answering 401/403, and the status arm below would read that as
+  // a dead credential. pi-ai has no code for those, so the shim's request arm is
+  // the honest floor. Only a documented code counts, so the status-first caution
+  // below still holds for every body that names none.
+  if (documented?.family === 'request') return 'client'
   if (status === 402) return 'quota_exceeded'
   if (status === 429) return 'soft_rate'
   if (status === 401 || status === 403) return 'auth'
@@ -148,6 +173,7 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   for (const marker of ['invalid token', 'invalid pat', 'invalid job token', 'token expired', 'token has expired', 'unauthorized', 'forbidden', 'not authenticated']) {
     if (lower.includes(marker)) return 'auth'
   }
+  if (status === 408) return 'timeout'
   if (status === 0 || status >= 500) return 'server'
   return 'client'
 }
@@ -164,18 +190,48 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
  * `code: RATE_LIMIT, status: 403` (body carries 10605/isQueued/
  * retryAfterSeconds), and letting the status arm claim it reported a dead
  * credential — which the host never retries — instead of a throttle it would.
+ *
+ * `QUOTA` and the request family are tested before the auth family for the same
+ * reason: both keep the upstream's 401/403 (see `qoderHttpError`), and the status
+ * arm would call a spent daily window or a refused request a credential
+ * rejection. `status === 402` is tested before the request arm so that a 402 the
+ * transport coded `INVALID_REQUEST` (its 4xx fallback) still reads as a quota.
  */
 export function kindFromQoderFailure(failure: { code: string; status?: number | undefined }): UpstreamErrorKind {
   if (failure.code === 'MISSING_CREDENTIAL') return 'missing_credential'
   if (failure.code === 'RATE_LIMIT') return 'soft_rate'
-  if (failure.code === 'AUTH' || failure.status === 401 || failure.status === 403) return 'auth'
-  if (failure.status === 429) return 'soft_rate'
-  if (failure.code === 'QUOTA' || failure.status === 402) return 'quota_exceeded'
+  // A quota code outranks the status arms, exactly as RATE_LIMIT above does. The
+  // transport codes a spent daily window QUOTA while keeping the upstream's 403,
+  // so testing the status first would claim it as an authorization rejection and
+  // the shim would answer 401 "auth" — the "API 密钥无效" report this fix exists to
+  // remove (#10). Only these two code strings count; every other failure still
+  // routes exactly as before.
+  //
+  // `QUOTA` is what this plugin's transport emits. `ACCOUNT_QUOTA` is the kernel's
+  // more specific code for an account-level balance, accepted as an alias so the
+  // two names cannot route differently. Nothing in the installed stack produces it
+  // today — this transport emits QUOTA, and dsh-llm-pi-ai only ever returns QUOTA —
+  // so it is a forward-compatible alias, not a live input.
+  if (failure.code === 'QUOTA' || failure.code === 'ACCOUNT_QUOTA') return 'quota_exceeded'
+  // 402 comes before the request arm so that a 402 the transport coded
+  // INVALID_REQUEST (its 4xx fallback) still reads as an exhausted balance.
+  if (failure.status === 402) return 'quota_exceeded'
+  // The request/policy arm precedes auth for the same reason: the transport keeps
+  // the upstream's 401/403 when a documented request code was named (see
+  // qoderHttpError), and the status arm would otherwise call a content refusal a
+  // credential rejection.
   if (failure.code.startsWith('INVALID_') || failure.code.startsWith('UNSUPPORTED_') || failure.code === 'ATTACHMENT') {
     return 'client'
   }
-  // TIMEOUT, SERVER, EMPTY_RESPONSE, MALFORMED_RESPONSE, TRANSPORT,
-  // PROVIDER_ERROR, and anything unrecognized: a server-side condition.
+  if (failure.code === 'AUTH' || failure.status === 401 || failure.status === 403) return 'auth'
+  if (failure.status === 429) return 'soft_rate'
+  // A timeout keeps its own kind so the shim can answer 408 with the word in the
+  // message. Folding it into `server` answered 502, and pi-ai reads a 5xx number
+  // as SERVER before it ever tests for a timeout — so a stalled request reported a
+  // server fault.
+  if (failure.code === 'TIMEOUT') return 'timeout'
+  // SERVER, EMPTY_RESPONSE, MALFORMED_RESPONSE, TRANSPORT, PROVIDER_ERROR, and
+  // anything unrecognized: a server-side condition.
   return 'server'
 }
 

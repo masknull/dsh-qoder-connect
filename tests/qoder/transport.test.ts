@@ -525,6 +525,64 @@ test('QoderTransport reads a queued HTTP 403 from the chat error body', async ()
   assert.equal(exchanges, 1)
 })
 
+test('QoderTransport reads the daily-limit 403 as QUOTA and does not re-auth', async () => {
+  // dsh-qoder-connect#10, end to end: the upstream answers inside its SSE
+  // envelope with statusCodeValue 403 and the daily billing counter's own body.
+  // Coded AUTH this reached dsh-llm-pi-ai as AUTH, so the UI said "API 密钥无效"
+  // and the user regenerated a PAT that was never the problem — while the counter
+  // simply resets the next day.
+  let chatCalls = 0
+  let exchanges = 0
+  const refreshFailures: number[] = []
+  const transport = createQoderTransport({
+    region: 'china',
+    resolvePat: () => Promise.resolve('pt-daily-limit'),
+    resolveMachineId: () => 'machine-test',
+    onJobTokenRefreshFailed: info => { refreshFailures.push(info.at) },
+    fetch: (async (input: URL | Request): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) {
+        exchanges++
+        return new Response(JSON.stringify({ token: `jt-${exchanges}` }))
+      }
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-daily-limit' }))
+      if (url.includes('/agent_chat_generation')) {
+        chatCalls++
+        return new Response(
+          'data: ' + JSON.stringify({
+            statusCodeValue: 403,
+            body: '{"code":"110","message":"Billing daily count exceeded"}',
+          }) + '\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+  const request: GenerateOptions = {
+    provider: 'qoder-official',
+    model: 'qfmodel',
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
+  }
+
+  await assert.rejects(async () => {
+    for await (const _chunk of transport.stream(request)) continue
+  }, (error: Error) => error instanceof QoderLlmError
+    && error.code === 'QUOTA'
+    && error.failure.status === 403
+    // The digits dsh-llm-pi-ai matches first must be gone, or the user still
+    // reads a dead credential.
+    && !/\b(?:401|403)\b/u.test(error.message)
+    && error.message.includes('Billing daily count exceeded'))
+
+  // A spent daily window is not a rejected credential. The heal exists for a
+  // stale job token; a fresh one cannot clear a quota, so it must not run — and
+  // it must not report that "the refresh did not recover the chat" either.
+  assert.equal(exchanges, 1, 'only the initial exchange; a quota answer must not trigger a re-auth')
+  assert.equal(chatCalls, 1, 'the chat is not retried against a spent quota')
+  assert.deepEqual(refreshFailures, [], 'no failed-heal notice for a quota answer')
+})
+
 test('QoderTransport reports an exhausted self-heal once, not once per host retry', async () => {
   // The observed outage: one upstream rejection that no fresh token could
   // clear, retried 59 times by the host across 75 steps. The transport
