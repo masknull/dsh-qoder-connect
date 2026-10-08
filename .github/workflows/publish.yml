@@ -1,0 +1,77 @@
+name: Publish Package
+
+# Publishes to npm using trusted publishing (OIDC): no long-lived npm token is
+# read or stored anywhere in this repository.
+#
+# Preparation, in this order — the ordering matters:
+#   1. this file must exist on the default branch under .github/workflows/,
+#      with the exact filename configured on npmjs.com ("publish.yml");
+#   2. then add the trusted publisher on npmjs.com (package Settings →
+#      Trusted publishing → GitHub Actions): user "masknull", repository
+#      "dsh-qoder-connect", workflow filename "publish.yml";
+#   3. a newly created trusted publisher configuration must complete its first
+#      successful publish within 2 days or it expires and cannot be edited.
+#
+# See https://docs.npmjs.com/trusted-publishers
+
+on:
+  push:
+    tags: ['v*']
+  # A tag pushed before this workflow existed cannot trigger it, so the first
+  # publish is started by hand from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  id-token: write # required: lets this job request the OIDC identity npm verifies
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest # trusted publishing supports GitHub-hosted runners only
+    steps:
+      - uses: actions/checkout@v7
+
+      # This repository is pnpm-managed (pnpm-lock.yaml, no package-lock.json), so
+      # `npm ci` cannot run here — pnpm installs the tree. Every script below then
+      # runs through npm, which is also what has to perform the publish: npm's CLI
+      # is what detects the OIDC environment.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.4.2 # the version that produced the committed lockfile
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # never cache in release builds
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: npm run typecheck
+
+      # File-level parallelism is off on purpose: tests/settings-integration.spec.ts
+      # boots a host and polls with vi.waitFor, and it flaked under full parallel
+      # load locally (a different test each run, always green in isolation).
+      - run: npm test -- --no-file-parallelism
+
+      - run: npm run test:qoder
+
+      - run: npm run build
+
+      - name: Resolve the dist-tag from the package version
+        id: dist_tag
+        run: |
+          version=$(node -p "require('./package.json').version")
+          case "$version" in
+            *-alpha*) tag=alpha ;;
+            *-beta*)  tag=beta ;;
+            *-rc*)    tag=rc ;;
+            *)        tag=latest ;;
+          esac
+          echo "publishing $version with --tag $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # No --provenance: publishing through trusted publishing from GitHub
+      # generates provenance automatically. No NODE_AUTH_TOKEN / NPM_TOKEN either —
+      # npm prefers OIDC over any token, and a token is exactly what this replaces.
+      - run: npm publish --tag ${{ steps.dist_tag.outputs.tag }}
