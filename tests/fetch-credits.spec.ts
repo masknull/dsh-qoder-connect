@@ -108,6 +108,39 @@ describe('fetchCredits shapes', () => {
     expect(credits.totalSize).toBe(400)
   })
 
+  it('carries the upstream itemized link for the summed bonus bucket', async () => {
+    // The account page breaks 赠送额度 into several grants, each with its own
+    // expiry, while this endpoint answers ONE summed number and no date. The
+    // link is therefore the only honest answer to "when does this expire", and
+    // it is region-correct for free: qoder.com international, qoder.com.cn
+    // domestic — the upstream sends the right one per variant.
+    const credits = await clientFor(account({
+      userQuota: { total: 0, used: 0, remaining: 0, percentage: 0, unit: 'credits' },
+      addOnQuota: {
+        total: 400,
+        used: 90,
+        remaining: 310,
+        percentage: 23,
+        unit: 'credits',
+        detailUrl: 'https://qoder.com/account/usage',
+      },
+    })).fetchCredits()
+    const addOn = credits.accounts.find(entry => entry.packageName === '赠送额度')
+    expect(addOn).toEqual({
+      packageName: '赠送额度',
+      remain: 310,
+      size: 400,
+      detailUrl: 'https://qoder.com/account/usage',
+    })
+  })
+
+  it('states no link for a bucket the upstream did not link', async () => {
+    const credits = await clientFor(account({
+      addOnQuota: { total: 100, used: 0, remaining: 100, percentage: 0, unit: 'credits' },
+    })).fetchCredits()
+    expect('detailUrl' in (credits.accounts[0] ?? {})).toBe(false)
+  })
+
   it('omits the bonus package entirely when the upstream does not report one', async () => {
     const credits = await clientFor(account({
       userQuota: { total: 300, used: 0, remaining: 300, percentage: 0.01, unit: 'credits' },

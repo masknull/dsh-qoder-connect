@@ -82,6 +82,24 @@ function hostLocale(): string {
   return activeLanguage === 'en' ? 'en-US' : 'zh-CN'
 }
 
+/**
+ * The site a detail link points at, for labelling that link.
+ *
+ * The upstream sends the URL per bucket, and it already carries the region:
+ * `qoder.com` on the international edition, `qoder.com.cn` on the Chinese one.
+ * Printing that host is therefore correct for both variants with no
+ * variant-specific constant anywhere in the plugin — and the user can see
+ * which site they are about to open.
+ */
+export function detailUrlHost(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined
+  try {
+    return new URL(url).host
+  } catch {
+    return undefined
+  }
+}
+
 /** One merged sidebar row: a package group and its summed figures. */
 export interface QuotaGroup {
   /** Package display name, verbatim from the upstream. */
@@ -100,6 +118,13 @@ export interface QuotaGroup {
   size: number
   /** Any member is unlimited — the group renders as unlimited, not as sums. */
   unlimited: boolean
+  /**
+   * The upstream's itemized page, carried from the first member that linked
+   * one. The card shows it where a date would otherwise be claimed: the summed
+   * bonus-credit bucket has no expiry in the API, but the account page lists
+   * the grants behind it with per-grant expiries.
+   */
+  detailUrl: string | undefined
 }
 
 /**
@@ -136,6 +161,7 @@ export function mergeCreditAccounts(accounts: readonly QoderWebCreditAccount[]):
         remain: account.remain,
         size: account.size,
         unlimited: account.unlimited === true,
+        detailUrl: account.detailUrl,
       })
       continue
     }
@@ -154,6 +180,9 @@ export function mergeCreditAccounts(accounts: readonly QoderWebCreditAccount[]):
     } else {
       existing.packageEndTime = existing.packageEndTime ?? account.packageEndTime
     }
+    // First link wins: every member of a same-named group points at the same
+    // itemized page, so the group needs one, not a merge.
+    existing.detailUrl = existing.detailUrl ?? account.detailUrl
   }
   return [...groups.values()]
 }

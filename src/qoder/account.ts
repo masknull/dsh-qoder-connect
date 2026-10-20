@@ -12,6 +12,19 @@ export interface QoderQuota {
   remaining: number
   percentage: number
   unit: string
+  /**
+   * Where the upstream itself itemizes this bucket — the account's usage page.
+   *
+   * `addOnQuota` carries one (`https://qoder.com/account/usage` on the
+   * international edition, `…/…com.cn/…` on the Chinese one), and it is the
+   * ONLY place the per-package breakdown lives: the web page lists the bonus
+   * credits as several grants, each with its own expiry, while this endpoint
+   * answers a single summed bucket. So the URL is the honest answer to "when
+   * does this expire" — the card cannot compute what the API never reports,
+   * and the breakdown needs the browser's session cookie, which a PAT cannot
+   * authorize.
+   */
+  detailUrl?: string | undefined
 }
 
 /**

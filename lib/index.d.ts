@@ -231,6 +231,16 @@ interface QoderWebCreditAccount {
   };
   /** The opaque upstream campaign code behind the same grant, when known. */
   packageCode?: string;
+  /**
+   * The upstream's itemized page for this bucket, when it links one.
+   *
+   * `detailUrl` on the summed bonus-credit row is the card's answer to "when
+   * does this expire": the account page lists those credits as several grants
+   * with per-grant expiries, while the quota endpoint reports only a summed
+   * total and no date. The breakdown needs the browser's session cookie, so a
+   * PAT cannot fetch it and the link is the honest substitute.
+   */
+  detailUrl?: string;
 }
 /** Aggregated credit answer rendered by the plugin card. */
 interface QoderWebCredits {
@@ -806,6 +816,19 @@ interface QoderQuota {
   remaining: number;
   percentage: number;
   unit: string;
+  /**
+   * Where the upstream itself itemizes this bucket — the account's usage page.
+   *
+   * `addOnQuota` carries one (`https://qoder.com/account/usage` on the
+   * international edition, `…/…com.cn/…` on the Chinese one), and it is the
+   * ONLY place the per-package breakdown lives: the web page lists the bonus
+   * credits as several grants, each with its own expiry, while this endpoint
+   * answers a single summed bucket. So the URL is the honest answer to "when
+   * does this expire" — the card cannot compute what the API never reports,
+   * and the breakdown needs the browser's session cookie, which a PAT cannot
+   * authorize.
+   */
+  detailUrl?: string | undefined;
 }
 /**
  * A named grant of credits that expires on its own schedule.
@@ -985,6 +1008,15 @@ interface QoderCreditAccount {
   };
   /** Opaque upstream code for the same grant (`act-20261014-129`), when known. */
   packageCode?: string;
+  /**
+   * The upstream's itemized page for this bucket, when it links one.
+   *
+   * The summed `赠送额度` row is the case that needs it: the account page
+   * breaks those credits into several grants, each with its own expiry, and
+   * this API reports only the total — so the link, not a date computed here,
+   * is what the card offers when the user asks when it runs out.
+   */
+  detailUrl?: string;
 }
 /** The aggregated credit answer the card renders. */
 interface QoderCredits {

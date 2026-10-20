@@ -21,7 +21,7 @@ import type {
   QoderWebStatus,
 } from '../status-paths.ts'
 import type { QoderSettingsKey } from './locales.ts'
-import { accountDisplayName, formatPercentText, usedPercentText } from './quota-merge.ts'
+import { accountDisplayName, detailUrlHost, formatPercentText, usedPercentText } from './quota-merge.ts'
 import { QuotaSettingsContent, type QuotaSection, type QuotaSettingsScope } from './QuotaSettingsCard.tsx'
 import {
   acquireLiveCard,
@@ -463,17 +463,30 @@ function patSourceText(source: QoderCredentialSource, t: QoderPluginCardInjected
  * honest "remaining N" line printed below it. Unknown size therefore renders the
  * percent slot as unknown copy and an unfilled, indeterminate track.
  */
-function CreditBar({ label, remain, size, unlimited, packageEndTime, t }: {
+function CreditBar({ label, remain, size, unlimited, packageEndTime, detailUrl, t }: {
   label: string
   remain: number
   size: number
   unlimited?: boolean | undefined
   packageEndTime?: string | undefined
+  /** The upstream's itemized page, shown where a date the API never sent would be. */
+  detailUrl?: string | undefined
   t: QoderPluginCardInjected['t']
 }): React.ReactNode {
-  const expiry = packageEndTime === undefined
-    ? null
-    : <p style={modelRateStyle}>{t('quotaExpires')} {formatCycleReset(packageEndTime)}</p>
+  const expiry = packageEndTime !== undefined
+    ? <p style={modelRateStyle}>{t('quotaExpires')} {formatCycleReset(packageEndTime)}</p>
+    // No expiry reported, but the upstream links the page that itemizes this
+    // summed bucket: point there instead of claiming the credit never expires.
+    : detailUrl !== undefined
+      ? <p style={modelRateStyle}>
+        <a
+          href={detailUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: 2 }}
+        >{t('quotaExpirySeeWeb', { site: detailUrlHost(detailUrl) ?? '' })}</a>
+      </p>
+      : null
   if (unlimited === true) {
     const quotaText = t('unlimitedQuota')
     return (
@@ -1726,6 +1739,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
                               size={account.size}
                               unlimited={account.unlimited}
                               packageEndTime={account.packageEndTime}
+                              detailUrl={account.detailUrl}
                               t={t}
                             />
                           ))}

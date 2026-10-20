@@ -205,6 +205,16 @@ export interface QoderWebCreditAccount {
   packageNameI18n?: { zh?: string | undefined; en?: string | undefined }
   /** The opaque upstream campaign code behind the same grant, when known. */
   packageCode?: string
+  /**
+   * The upstream's itemized page for this bucket, when it links one.
+   *
+   * `detailUrl` on the summed bonus-credit row is the card's answer to "when
+   * does this expire": the account page lists those credits as several grants
+   * with per-grant expiries, while the quota endpoint reports only a summed
+   * total and no date. The breakdown needs the browser's session cookie, so a
+   * PAT cannot fetch it and the link is the honest substitute.
+   */
+  detailUrl?: string
 }
 
 /** Aggregated credit answer rendered by the plugin card. */

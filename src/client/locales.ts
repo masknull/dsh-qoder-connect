@@ -158,6 +158,12 @@ export const en = {
   quotaUnlimited: 'Unlimited',
   quotaExpires: 'Expires',
   quotaNoExpiry: 'No expiry',
+  /**
+   * Shipped in place of a date the API never reported, for a summed bucket the
+   * account page itemizes. `{site}` is the link's own host, so the text names
+   * qoder.com or qoder.com.cn according to which variant the credit is on.
+   */
+  quotaExpirySeeWeb: 'See {site}',
   quotaError: 'Credit unavailable',
   quotaNotSignedIn: 'Save a PAT to see the remaining credit',
   quotaUpdated: 'Updated',
@@ -339,6 +345,7 @@ export const zh: Record<QoderSettingsKey, string> = {
   quotaUnlimited: '不限量',
   quotaExpires: '到期',
   quotaNoExpiry: '无到期时间',
+  quotaExpirySeeWeb: '见 {site}',
   quotaError: '额度信息不可用',
   quotaNotSignedIn: '保存 PAT 后显示剩余额度',
   quotaUpdated: '更新于',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountDisplayName, clampPercent, currentLanguage, formatExpiryText, formatPercentText, mergeCreditAccounts, setActiveLanguage, sortPackageRows, usedPercentText, visibleQuotaGroups } from '../src/client/quota-merge.ts'
+import { accountDisplayName, clampPercent, currentLanguage, detailUrlHost, formatExpiryText, formatPercentText, mergeCreditAccounts, setActiveLanguage, sortPackageRows, usedPercentText, visibleQuotaGroups } from '../src/client/quota-merge.ts'
 import type { QuotaGroup } from '../src/client/quota-merge.ts'
 import type { QoderWebCreditAccount } from '../src/status-paths.ts'
 
@@ -117,6 +117,7 @@ describe('visibleQuotaGroups', () => {
     remain: 100,
     size: 200,
     unlimited: false,
+    detailUrl: undefined,
     ...over,
   })
 
@@ -290,6 +291,26 @@ describe('formatExpiryText', () => {
   })
 })
 
+describe('detailUrlHost', () => {
+  // The link label is how the card stays region-correct without a single
+  // variant-specific constant: the upstream sends qoder.com for the
+  // international edition and qoder.com.cn for the Chinese one, and the card
+  // prints whichever host the bucket actually points at.
+  it('names the site the link points at', () => {
+    expect(detailUrlHost('https://qoder.com/account/usage')).toBe('qoder.com')
+    expect(detailUrlHost('https://qoder.com.cn/account/usage')).toBe('qoder.com.cn')
+  })
+
+  it('keeps a port rather than truncating the host', () => {
+    expect(detailUrlHost('https://qoder.com:8443/account/usage')).toBe('qoder.com:8443')
+  })
+
+  it('states nothing for a missing or malformed link instead of labelling a dead anchor', () => {
+    expect(detailUrlHost(undefined)).toBeUndefined()
+    expect(detailUrlHost('not a url')).toBeUndefined()
+  })
+})
+
 describe('mergeCreditAccounts with titles', () => {
   it('carries the first member title map onto the group', () => {
     const groups = mergeCreditAccounts([
@@ -299,5 +320,28 @@ describe('mergeCreditAccounts with titles', () => {
     expect(groups).toHaveLength(1)
     expect(groups[0]?.remain).toBe(2500)
     expect(accountDisplayName(groups[0]!, 'en')).toBe('SOTA Exclusive Credits')
+  })
+})
+
+describe('mergeCreditAccounts with detail links', () => {
+  it('carries the member link onto the group so the row can offer the page', () => {
+    const groups = mergeCreditAccounts([
+      acct('赠送额度', 310, 400, { detailUrl: 'https://qoder.com/account/usage' }),
+    ])
+    expect(groups[0]?.detailUrl).toBe('https://qoder.com/account/usage')
+  })
+
+  it('keeps a link from a later member when the first had none', () => {
+    const groups = mergeCreditAccounts([
+      acct('赠送额度', 100, 100),
+      acct('赠送额度', 210, 300, { detailUrl: 'https://qoder.com.cn/account/usage' }),
+    ])
+    expect(groups[0]?.remain).toBe(310)
+    expect(groups[0]?.detailUrl).toBe('https://qoder.com.cn/account/usage')
+  })
+
+  it('leaves the group link undefined when no member reported one', () => {
+    const groups = mergeCreditAccounts([acct('个人额度', 0, 0)])
+    expect(groups[0]?.detailUrl).toBeUndefined()
   })
 })

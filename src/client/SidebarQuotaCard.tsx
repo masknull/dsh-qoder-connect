@@ -21,7 +21,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { QoderWebCreditAccount, QoderWebStatus } from '../status-paths.ts'
 import type { QoderSettingsKey } from './locales.ts'
-import { accountDisplayName, clampPercent, formatExpiryText, formatPercentText, formatStampText, mergeCreditAccounts, sortPackageRows, usedPercentText, visibleQuotaGroups } from './quota-merge.ts'
+import { accountDisplayName, clampPercent, detailUrlHost, formatExpiryText, formatPercentText, formatStampText, mergeCreditAccounts, sortPackageRows, usedPercentText, visibleQuotaGroups } from './quota-merge.ts'
 import { acquireLiveSurface, onQuotaSettingsChange, quotaReadFailure, quotaSettingsRevision, quotaStatus, quotaStatusFetchedAt, quotaToggles, variantOfStatusPath } from './quota-settings-store.ts'
 /** Everything the registration binds into the card. */
 export interface SidebarQuotaCardInjected {
@@ -44,6 +44,7 @@ export type QuotaCopyKey =
   | 'quotaUnlimited'
   | 'quotaExpires'
   | 'quotaNoExpiry'
+  | 'quotaExpirySeeWeb'
   | 'quotaError'
   | 'quotaNotSignedIn'
   | 'quotaUpdated'
@@ -77,6 +78,7 @@ const _assertQuotaKeys: Record<QuotaCopyKey, QoderSettingsKey> = {
   quotaUnlimited: 'quotaUnlimited',
   quotaExpires: 'quotaExpires',
   quotaNoExpiry: 'quotaNoExpiry',
+  quotaExpirySeeWeb: 'quotaExpirySeeWeb',
   quotaError: 'quotaError',
   quotaNotSignedIn: 'quotaNotSignedIn',
   quotaUpdated: 'quotaUpdated',
@@ -140,6 +142,12 @@ interface QuotaBarView {
   warn: boolean
   /** Group expiry, verbatim; undefined when none was reported. */
   packageEndTime: string | undefined
+  /**
+   * The upstream's itemized page for this group, when it links one. Rendered
+   * in place of a date the API never reported — the honest answer to "when
+   * does this expire" for the summed bonus-credit bucket.
+   */
+  detailUrl: string | undefined
 }
 
 /** A credit account as the card sees it (the status document's shape). */
@@ -167,6 +175,7 @@ function buildBars(accounts: readonly QuotaAccountView[]): QuotaBarView[] {
       barPercent: percent === undefined ? 0 : Math.max(2, percent),
       warn: !group.unlimited && percent !== undefined && percent < 20,
       packageEndTime: group.packageEndTime,
+      detailUrl: group.detailUrl,
     })
   }
   return bars
@@ -210,6 +219,8 @@ interface PackageRow {
   percent: number | undefined
   warn: boolean
   packageEndTime: string | undefined
+  /** The upstream's itemized page for this package, when it links one. */
+  detailUrl: string | undefined
 }
 
 /**
@@ -232,6 +243,7 @@ function buildPackageRows(accounts: readonly QuotaAccountView[]): PackageRow[] {
       percent,
       warn: account.unlimited !== true && percent !== undefined && percent < 20,
       packageEndTime: account.packageEndTime,
+      detailUrl: account.detailUrl,
     }
   })
 }
@@ -351,7 +363,16 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
         bars.map((bar, index) => (
           <span className="qdp-footRow" key={`${index}\u0000${bar.label}\u0000${bar.packageEndTime ?? ''}`}>
             <span className="qdp-footHead">
-              <span className="qdp-footLabel" title={bar.packageEndTime !== undefined ? `${t('quotaExpires')} ${formatExpiryText(bar.packageEndTime) ?? bar.packageEndTime}` : t('quotaNoExpiry')}>
+              <span className="qdp-footLabel" title={
+                bar.packageEndTime !== undefined
+                  ? `${t('quotaExpires')} ${formatExpiryText(bar.packageEndTime) ?? bar.packageEndTime}`
+                  // No date, but the upstream links the page that itemizes the
+                  // grants behind this summed bucket: say where the answer
+                  // lives rather than claiming there is none.
+                  : bar.detailUrl !== undefined
+                    ? t('quotaExpirySeeWeb', { site: detailUrlHost(bar.detailUrl) ?? '' })
+                    : t('quotaNoExpiry')
+              }>
                 {bar.label}
                 {bar.usedPercent === undefined ? null : t('quotaPackageUsed', { percent: bar.usedPercent })}
               </span>
@@ -599,7 +620,26 @@ export function QuotaDashboard(props: QuotaDashboardProps): React.ReactNode {
                           />
                         </span>
                       </td>
-                      <td className="qdp-expiry">{(row.packageEndTime !== undefined ? formatExpiryText(row.packageEndTime) : undefined) ?? t('quotaNoExpiry')}</td>
+                      <td className="qdp-expiry">{
+                        // A reported expiry wins; otherwise the upstream's own
+                        // itemized page answers "when does this expire" for a
+                        // summed bucket the API gives no date for.
+                        row.packageEndTime !== undefined
+                          ? formatExpiryText(row.packageEndTime) ?? row.packageEndTime
+                          : row.detailUrl !== undefined
+                            ? <a
+                              className="qdp-expiryLink"
+                              href={row.detailUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              onClick={event => {
+                                // The row is not itself a control, but stop the
+                                // click reaching any ancestor that is.
+                                event.stopPropagation()
+                              }}
+                            >{t('quotaExpirySeeWeb', { site: detailUrlHost(row.detailUrl) ?? '' })}</a>
+                            : t('quotaNoExpiry')
+                      }</td>
                     </tr>
                   ))}
                 </tbody>

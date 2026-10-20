@@ -635,6 +635,62 @@ describe('Unified Qoder Plugin Card', () => {
     act(() => panel?.unmount())
   })
 
+  it('offers the upstream itemized page where the API reports no expiry', async () => {
+    // The summed 赠送额度 bucket has no expiry in the quota endpoint at all —
+    // the account page is what breaks it into grants with per-grant dates. The
+    // row must therefore stop claiming "no expiry" and point at the page
+    // instead, labelled with the host the upstream sent so the international
+    // and Chinese variants each name their own site with no hardcoded string.
+    // A row that DOES carry a reported expiry keeps the date: the link stands
+    // in for a missing answer and never replaces a real one.
+    noteQuotaSignIn('qoder-global', true)
+    noteQuotaStatus('qoder-global', {
+      status: 'signed-in',
+      pat: { source: 'card', savedAtMs: Date.parse('2026-10-16T02:05:36.888Z'), patTail: 'd092' },
+      credits: {
+        total: 0.23,
+        totalSize: 400,
+        accounts: [
+          { packageName: '赠送额度', remain: 310, size: 400, detailUrl: 'https://qoder.com.cn/account/usage' },
+          { packageName: 'SOTA 专属积分', remain: 2000, size: 2000, packageEndTime: '2026-10-19T01:59:57.331Z', detailUrl: 'https://qoder.com/account/usage' },
+        ],
+      },
+    })
+
+    let panel: ReactTestRenderer | undefined
+    await act(async () => {
+      panel = create(createElement(QuotaDashboard, {
+        t: tZh as any,
+        statusPaths: [QODER_GLOBAL_STATUS_PATH],
+        refresh: () => {},
+        close: () => {},
+        onVariantPicked: () => {},
+        useQuotaDashboard: (selector: (state: { loading: boolean; activePath: string }) => unknown) =>
+          selector({ loading: false, activePath: QODER_GLOBAL_STATUS_PATH }),
+      } as any))
+    })
+
+    const anchors = panel!.root.findAll(node => node.type === 'a')
+    // Exactly one: the undated bucket links, the dated one prints its date.
+    expect(anchors).toHaveLength(1)
+    expect(anchors[0]!.props.href).toBe('https://qoder.com.cn/account/usage')
+    expect(anchors[0]!.props.target).toBe('_blank')
+    // Opens as an external link the page cannot reach back into the app.
+    expect(anchors[0]!.props.rel).toBe('noreferrer noopener')
+    // The label names the site the link points at — the .cn host, proving the
+    // card echoes the upstream rather than assuming a region.
+    const label = anchors[0]!.children.filter((child): child is string => typeof child === 'string').join('')
+    expect(label).toContain('qoder.com.cn')
+    expect(label).not.toContain('qoder.com/account')
+
+    const tree = JSON.stringify(panel!.toJSON())
+    // The dated row still shows a localized date, not a second link.
+    expect(tree).toContain('2026')
+    // "无到期时间" is no longer what an undated-but-linked row claims.
+    expect(tree).not.toContain(zh.quotaNoExpiry)
+    act(() => panel?.unmount())
+  })
+
   it('rejects write to scope.set when attempting to turn on sidebarQuotaCN/Global while unsigned', async () => {
     const mockSet = vi.fn()
     const fakeScope = {

@@ -397,6 +397,38 @@ test('QoderUsageReader reads dedicated campaign packages and drops the year-9999
   assert.equal((account.usage?.raw as { dedicatedResourcePackages?: unknown[] }).dedicatedResourcePackages?.length, 2)
 })
 
+test('QoderUsageReader carries the upstream itemized link for a summed bucket', async () => {
+  // The quota endpoint answers the bonus credits as ONE summed bucket with no
+  // expiry, and hands the caller a `detailUrl` pointing at the page that does
+  // itemize them (with a per-grant expiry each). Dropping that field left the
+  // card with nothing honest to say about when the bucket runs out.
+  const fetchMock = async (input: URL | Request): Promise<Response> => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-link', expires_in: 3_600_000 }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-link', name: 'Link Case' }))
+    if (url.includes('/plan') || url.includes('/status')) return new Response(JSON.stringify({}), { status: 503 })
+    if (url.includes('/quota/usage')) {
+      return new Response(JSON.stringify({
+        userQuota: { total: 0, used: 0, remaining: 0, percentage: 0, unit: 'credits' },
+        addOnQuota: {
+          total: 400, used: 90, remaining: 310, percentage: 0.23, unit: 'credits',
+          detailUrl: 'https://qoder.com/account/usage',
+        },
+        expiresAt: 253402214400000,
+      }))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const authService = new QoderAuthService({ fetch: fetchMock as typeof fetch, resolveMachineId: () => 'machine-link' })
+  const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
+
+  const account = await reader.readAccount('pt-link')
+  assert.equal(account.usage?.addOnQuota?.detailUrl, 'https://qoder.com/account/usage')
+  assert.equal(account.usage?.addOnQuota?.remaining, 310)
+  // A bucket the upstream did not link states no link, rather than an empty one.
+  assert.equal(account.usage?.userQuota?.detailUrl, undefined)
+})
+
 test('QoderUsageReader keeps a real plan expiry that merely looks far out', async () => {
   // Guard against a sentinel test that over-fits: a subscription ending in
   // 2031 is a date the card must print, so the drop keys on the year-9999

@@ -48,6 +48,8 @@ interface RawQuota {
   percentage?: number
   unit?: string
   available?: boolean
+  /** The upstream's own link to the itemized usage page for this bucket. */
+  detailUrl?: string
 }
 
 interface RawUsageInfo {
@@ -99,8 +101,20 @@ function normalizeQuota(raw?: RawQuota): QoderQuota | undefined {
   }
 
   const unit = typeof raw.unit === 'string' && raw.unit.length > 0 ? raw.unit : 'credits'
+  // The itemized page the upstream links for this bucket. Carried through
+  // because it is the only honest answer to "when does this expire": the web
+  // page breaks the bonus credits into several grants with per-grant expiries,
+  // while this endpoint sums them into one number and reports no date at all.
+  const detailUrl = asString(raw.detailUrl)
 
-  return { total, used, remaining, percentage, unit }
+  return {
+    total,
+    used,
+    remaining,
+    percentage,
+    unit,
+    ...detailUrl === undefined ? {} : { detailUrl },
+  }
 }
 
 

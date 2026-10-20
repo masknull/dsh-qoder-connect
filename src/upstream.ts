@@ -118,6 +118,15 @@ export interface QoderCreditAccount {
   packageNameI18n?: { zh?: string | undefined; en?: string | undefined }
   /** Opaque upstream code for the same grant (`act-20261014-129`), when known. */
   packageCode?: string
+  /**
+   * The upstream's itemized page for this bucket, when it links one.
+   *
+   * The summed `赠送额度` row is the case that needs it: the account page
+   * breaks those credits into several grants, each with its own expiry, and
+   * this API reports only the total — so the link, not a date computed here,
+   * is what the card offers when the user asks when it runs out.
+   */
+  detailUrl?: string
 }
 
 /** The aggregated credit answer the card renders. */
@@ -787,6 +796,7 @@ export class QoderUpstreamClient {
         remain: addOn.remaining,
         size: addOn.total,
         ...usage.expiresAt === undefined ? {} : { packageEndTime: usage.expiresAt },
+        ...addOn.detailUrl === undefined ? {} : { detailUrl: addOn.detailUrl },
       })
     }
     // Campaign grants (`act-…` SOTA credits) are stacked in an array rather

@@ -152,6 +152,11 @@ export const QUOTA_CSS = `
 .qdp-numText{display:block;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin-bottom:3px}
 .qdp-miniBar{display:block;height:4px;border-radius:999px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}
 .qdp-expiry{white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+/* A summed bucket the API gives no date for links to the page that itemizes
+   it. Understated until hovered: it is a way out, not the row's headline. */
+.qdp-expiryLink{color:var(--dsw-alias-label-tertiary);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.qdp-expiryLink:hover{color:var(--dsw-alias-brand-primary)}
+.qdp-expiryLink:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px;border-radius:3px}
 
 /* Variant switch: plain buttons, like the settings page's usage carousel. */
 .qdp-tabs{flex-wrap:wrap;gap:6px;display:flex}
