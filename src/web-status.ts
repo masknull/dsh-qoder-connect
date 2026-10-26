@@ -77,6 +77,11 @@ export interface QoderStatusRouteOptions {
    * passes its own.
    */
   path?: string
+  /**
+   * Why the load-time peer check was skipped, when it was. Rides the document so
+   * the card declares the blind spot; absent when the check ran.
+   */
+  peerCheckSkipped?: () => string | undefined
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -144,6 +149,8 @@ function modelSnapshot(model: QoderModelInfo): QoderCatalogModelSnapshot {
  */
 export async function qoderWebStatus(deps: QoderStatusRouteOptions): Promise<QoderWebStatus> {
   const authStatus = await deps.store.status()
+  // Read once: both arms declare it, and the card shows it above everything else.
+  const peerSkipped = deps.peerCheckSkipped?.()
   if (authStatus.state !== 'configured') {
     // A diagnosable sign-out keeps its explanation: the generic hint would tell the
     // user to sign in when the real fix is to replace a file. The PAT key rides
@@ -152,6 +159,7 @@ export async function qoderWebStatus(deps: QoderStatusRouteOptions): Promise<Qod
       status: 'signed-out',
       ...authStatus.reason === undefined ? {} : { reason: authStatus.reason },
       ...deps.authKey === undefined ? {} : { authKey: deps.authKey },
+      ...peerSkipped === undefined ? {} : { peerCheckSkipped: peerSkipped },
     }
   }
   const status: QoderWebStatus = {
@@ -165,6 +173,7 @@ export async function qoderWebStatus(deps: QoderStatusRouteOptions): Promise<Qod
     ...authStatus.activeId === undefined ? {} : { activePatId: authStatus.activeId },
     // Both arms carry the key: a signed-in card needs it to clear the token.
     ...deps.authKey === undefined ? {} : { authKey: deps.authKey },
+    ...peerSkipped === undefined ? {} : { peerCheckSkipped: peerSkipped },
   }
   // Model facts ride the signed-in document so the card can show rates, efforts,
   // and context capacity without touching the Models picker. They are normalized

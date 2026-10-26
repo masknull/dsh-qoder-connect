@@ -342,3 +342,41 @@ describe('web status route gate', () => {
     expect(body.error).not.toContain('pt-live-abc')
   })
 })
+
+describe('skipped dependency self-check', () => {
+  // A skipped check must be declared on the card, not only in a log.
+  const REASON = 'cannot identify the running profile, so the peer version check was skipped'
+
+  it('declares the skip on a signed-in document', async () => {
+    const own = join(await tempDir(), '.qoder-auth.json')
+    await writePatDoc(own)
+    const doc = await qoderWebStatus({
+      ...baseDeps(own),
+      peerCheckSkipped: () => REASON,
+    })
+    expect(doc.status).toBe('signed-in')
+    if (doc.status !== 'signed-in') return
+    expect(doc.peerCheckSkipped).toBe(REASON)
+  })
+
+  it('declares the skip on a signed-out document too', async () => {
+    const own = join(await tempDir(), '.qoder-auth.json')
+    // No credential written: the store answers signed-out with a reason.
+    const doc = await qoderWebStatus({
+      ...baseDeps(own),
+      peerCheckSkipped: () => REASON,
+    })
+    expect(doc.status).toBe('signed-out')
+    if (doc.status !== 'signed-out') return
+    expect(doc.peerCheckSkipped).toBe(REASON)
+  })
+
+  it('omits the field when the check ran', async () => {
+    const own = join(await tempDir(), '.qoder-auth.json')
+    await writePatDoc(own)
+    const doc = await qoderWebStatus(baseDeps(own))
+    expect(doc.status).toBe('signed-in')
+    if (doc.status !== 'signed-in') return
+    expect('peerCheckSkipped' in doc).toBe(false)
+  })
+})

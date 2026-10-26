@@ -75,3 +75,66 @@ jobs:
       # generates provenance automatically. No NODE_AUTH_TOKEN / NPM_TOKEN either —
       # npm prefers OIDC over any token, and a token is exactly what this replaces.
       - run: npm publish --tag ${{ steps.dist_tag.outputs.tag }}
+
+      # The same tarball npm accepted, kept for the release page. `--ignore-scripts`
+      # skips the prepack build the publish above already ran.
+      - name: Pack the published tarball
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/pack/*.tgz
+          if-no-files-found: error
+
+  # A tag push publishes the package and then announces it. Only tag pushes: a
+  # manual dispatch has no tag to name a release after.
+  release:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # creating the release is the only write this job needs
+    steps:
+      # Full history: the notes span the previous tag, which may be hundreds of
+      # commits behind the shallow default.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Compose release notes for this tag's commit range
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+
+      # The tarball the publish job already produced; the release carries it so a
+      # consumer can install from the release page without npm.
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/assets
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          # A prerelease on npm must not become a stable (or Latest) release here;
+          # both sides read the same version to decide.
+          version="${tag#v}"
+          prerelease=""
+          latest=""
+          case "$version" in
+            *-*) prerelease="--prerelease"; latest="--latest=false" ;;
+          esac
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/release-notes.md" $prerelease $latest
+            gh release upload "$tag" "$RUNNER_TEMP"/assets/*.tgz --clobber
+          else
+            gh release create "$tag" --verify-tag --title "$tag" $prerelease $latest \
+              --notes-file "$RUNNER_TEMP/release-notes.md" "$RUNNER_TEMP"/assets/*.tgz
+          fi

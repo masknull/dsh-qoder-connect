@@ -8,7 +8,6 @@
  * @module dsh-qoder-connect
  */
 
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -20,7 +19,7 @@ import { FALLBACK_QODER_MODELS, QoderCatalog } from './catalog.ts'
 import { qoderCatalogPath, QoderCatalogStore } from './catalog-store.ts'
 import { createQoderAdapter } from './adapter.ts'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { createQoderShim } from './shim.ts'
 import { QoderProbeService } from './probe-service.ts'
 import { newestFirst, QoderProbeStore, qoderProbePath } from './probe-store.ts'
@@ -1379,63 +1378,82 @@ export function satisfiesRange(version: string, range: string): boolean {
 }
 
 /**
- * Fail loudly when the dependency tree this plugin resolves from is older than
- * the declared peer floor. pnpm installs plugins with `autoInstallPeers: false`,
- * so a stale `dsh-llm`/`pi-ai` in the shared profile `node_modules` keeps the
- * plugin alive long enough to misbehave; the first `import` it touches dies on
- * an unguarded `.length` read with no trace back to the version gap.
+ * The resolved peer's version, read through the resolver this module's own
+ * imports use.
  *
- * Runtime resolution is the only reliable check: `createRequire` resolves to the
- * exact copy Node will load, and `resolve.paths` gives the same lookup order.
- * Each spec reads the resolved `package.json` once — three reads, ~20ms, at
- * `apply` time only.
+ * The resolver's parent is this module, which is exactly the parent its static
+ * imports carry — so the entry found here is the copy Node loads, whatever the
+ * install shape (a plain `node_modules`, a pnpm store, an `app.asar` the
+ * Electron fs patch opens). Reading the filesystem instead would answer a
+ * different question: which copy happens to sit on disk.
+ *
+ * @param spec - the peer specifier as declared in `peerDependencies`.
+ * @param resolveEntry - injectable resolver for tests.
+ * @returns the version, or undefined when the copy cannot be named — that
+ *   absence is no verdict, only missing evidence.
  */
-function readResolvedVersion(require_: NodeJS.Require, spec: string): string | undefined {
-  for (const p of require_.resolve.paths(spec) ?? []) {
-    const pj = join(p, spec, 'package.json')
-    if (!existsSync(pj)) continue
-    try {
-      const parsed = JSON.parse(readFileSync(pj, 'utf8')) as { version?: unknown }
-      // A candidate that exists but states no version says nothing about the
-      // copy Node will load; keep looking, the same way an unreadable manifest
-      // does, so a partial directory never reads as "not installed".
-      if (typeof parsed.version === 'string') return parsed.version
-      continue
-    } catch {
-      // An unreadable manifest is the profile's problem, not a verdict about
-      // this plugin: keep looking rather than fail the load on a parse error.
-      continue
-    }
+function readResolvedVersion(
+  spec: string,
+  resolveEntry: (specifier: string) => string = specifier => import.meta.resolve(specifier),
+): string | undefined {
+  let entry: string
+  try {
+    entry = fileURLToPath(resolveEntry(spec))
+  } catch {
+    return undefined
   }
-  return undefined
+  for (let dir = dirname(entry); ; dir = dirname(dir)) {
+    const pj = join(dir, 'package.json')
+    if (existsSync(pj)) {
+      try {
+        const parsed = JSON.parse(readFileSync(pj, 'utf8')) as { name?: unknown; version?: unknown }
+        // Only a manifest carrying the requested name is this package's own. Any
+        // other directory in between (a nested `type: module` stub, a staged
+        // sub-package) is passed through instead of ending the walk early.
+        if (parsed.name === spec) {
+          return typeof parsed.version === 'string' ? parsed.version : undefined
+        }
+      } catch {
+        // An unreadable manifest proves nothing about this package: keep walking.
+      }
+    }
+    if (basename(dir) === 'node_modules' || dir === dirname(dir)) return undefined
+  }
+}
+
+/** What the load-time peer check concluded. */
+export interface PeerCheckOutcome {
+  /** A peer the host loads below its declared floor; the load must be refused. */
+  failure?: string
+  /** Peers whose copy could not be named, so they went unenforced. */
+  unverified: readonly string[]
 }
 
 /**
- * Report the first peer whose resolved copy cannot run this build.
+ * Report the first peer the host loads below its declared floor.
  *
- * pnpm installs plugins with `autoInstallPeers: false`, so a stale
- * `dsh-llm`/`pi-ai` beside the plugin or in the shared profile `node_modules`
- * stays resolvable long after this build declared a floor; the first import it
- * touches dies on an unguarded `.length` read with no trace back to the version
- * gap. Runtime resolution is the only reliable check: `createRequire` resolves to
- * the exact copy Node will load, and `resolve.paths` gives the same lookup order.
+ * Only a proven mismatch refuses the load. A peer whose copy cannot be resolved
+ * or read is reported as unverified instead: the static imports already linked,
+ * so the host supplied a working copy and failing here would refuse every clean
+ * install. Unverified peers still have to reach the card, or a check that quietly
+ * stopped enforcing would look like one that passed.
  *
- * @param require_ - resolver anchored at this module.
- * @param expectations - peers to check, in the order they are reported.
- * @param warn - sink for a range this checker cannot interpret, so a guard that
- *   silently stops enforcing is visible in the host log instead of passing quiet.
- * @returns the failure text, or undefined when every peer is usable.
- * @internal Exported for tests; `apply` passes the real resolver and peer list.
+ * @param expectations - peers to check, in report order.
+ * @param warn - sink for a range it cannot interpret.
+ * @param resolveEntry - injectable resolver for tests.
+ * @internal Exported for tests.
  */
 export function peerVersionFailure(
-  require_: NodeJS.Require = createRequire(import.meta.url),
   expectations: readonly PeerExpectation[] = peerExpectations(),
   warn?: (message: string) => void,
-): string | undefined {
+  resolveEntry?: (specifier: string) => string,
+): PeerCheckOutcome {
+  const unverified: string[] = []
   for (const { spec, range } of expectations) {
-    const version = readResolvedVersion(require_, spec)
+    const version = readResolvedVersion(spec, resolveEntry)
     if (version === undefined) {
-      return `${spec} is not resolvable from this installation; reinstall the plugin so its dependencies are installed again`
+      unverified.push(spec)
+      continue
     }
     if (!supportsRange(range)) {
       warn?.(`dsh-qoder-connect: cannot interpret the range "${range}" declared for ${spec}; `
@@ -1443,11 +1461,14 @@ export function peerVersionFailure(
       continue
     }
     if (!satisfiesRange(version, range)) {
-      return `${spec}@${range} is required, but this profile resolves ${version}; `
-        + `rebuild the profile dependency tree or update that package`
+      return {
+        failure: `${spec}@${range} is required, but the copy this host loads resolves to ${version}; `
+          + `rebuild the profile dependency tree or update that package`,
+        unverified,
+      }
     }
   }
-  return undefined
+  return { unverified }
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -1456,30 +1477,31 @@ export function apply(ctx: Context, config: Config): void {
   // status route that carries the refusal lets the card show the real message
   // and stop offering controls whose machinery never exists; throwing instead
   // would leave that card rendering actions that can only answer 404.
-  // Explicit arguments rather than a second `undefined`: the injected peer list
-  // and the real resolver are what the check should run with, and reading that
-  // from defaults hides it behind two placeholders.
-  const peerFailure = peerVersionFailure(
-    createRequire(import.meta.url),
+  // Before anything reads a path: every store built below freezes what it gets.
+  // `ctx.get` rather than `inject` — a profile context is absent in compositions
+  // booted without a profile, and this plugin still has to load there.
+  const profileContext = ctx.get('profileContext') as { dir?: string } | undefined
+  configurePluginPaths({
+    profileDir: profileContext?.dir,
+    diagnostics: ctx.logger,
+  })
+  const peerCheck = peerVersionFailure(
     peerExpectations(),
     message => { ctx.logger.warn(message) },
   )
-  if (peerFailure !== undefined) {
-    const message = `dsh-qoder-connect: ${peerFailure}`
+  if (peerCheck.failure !== undefined) {
+    const message = `dsh-qoder-connect: ${peerCheck.failure}`
     ctx.logger.warn(message)
     ctx.inject(['webServer'], webCtx => {
       for (const variant of QODER_VARIANTS) registerInactiveStatusRoute(webCtx, variant.statusPath, message)
     })
     return
   }
-  // Before anything reads a path: every store built below freezes what it gets.
-  // `ctx.get` rather than `inject` — a profile context is absent in compositions
-  // booted without a profile, and this plugin still has to load there.
-  const profileContext = ctx.get('profileContext') as { dir?: unknown } | undefined
-  configurePluginPaths({
-    profileDir: typeof profileContext?.dir === 'string' ? profileContext.dir : undefined,
-    diagnostics: ctx.logger,
-  })
+  // Unverified peers are a blind spot, not a pass: say so on the card.
+  const peerCheckSkipped = peerCheck.unverified.length === 0
+    ? undefined
+    : `could not determine the version of ${peerCheck.unverified.join(', ')}`
+  if (peerCheckSkipped !== undefined) ctx.logger.warn(`dsh-qoder-connect: ${peerCheckSkipped}`)
 
   // Live configuration source: the composition entry (read through the volatile
   // indirection) with the plugin-owned settings file layered on top. The entry
@@ -1685,6 +1707,7 @@ export function apply(ctx: Context, config: Config): void {
             disabledModels: () => current().disabledModels ?? [],
           }),
         jobTokenRefreshedAt: runtime.jobTokenRefreshedAt,
+        ...peerCheckSkipped === undefined ? {} : { peerCheckSkipped: () => peerCheckSkipped },
         checkIn: () => {
           const record = checkInStore.read(runtime.variant.id)
           if (record === undefined) return undefined

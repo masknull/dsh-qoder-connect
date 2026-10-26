@@ -216,6 +216,13 @@ const buttonStyle: CSSProperties = {
   cursor: 'pointer',
 }
 const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
+/** A skipped self-check, declared at the top: not an error, but never silent. */
+const peerNoticeStyle: CSSProperties = {
+  ...bodyStyle,
+  fontWeight: 600,
+  paddingInlineStart: 8,
+  borderInlineStart: '3px solid var(--dsw-alias-state-warning-primary, currentColor)',
+}
 const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 2 }
 const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 13, lineHeight: 1.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
@@ -1335,6 +1342,17 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
    * does; one helper keeps the guards, error handling and post-write re-read
    * together.
    */
+  /**
+   * A locally synthesized sign-out keeps the self-check note: signing out stops
+   * the polling, so a note dropped here would never come back. Documents read
+   * back from the host are stored verbatim, so a server answer without the field
+   * still clears a stale note.
+   */
+  const signOutDocument = useCallback((key: string): QoderWebStatus => {
+    const note = status !== undefined && 'peerCheckSkipped' in status ? status.peerCheckSkipped : undefined
+    return { status: 'signed-out', authKey: key, ...note === undefined ? {} : { peerCheckSkipped: note } }
+  }, [status])
+
   const patWrite = useCallback(async (
     body: Record<string, unknown>,
     failure: (message: string) => string,
@@ -1362,13 +1380,15 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
         setPatError(failure(detail))
         return false
       }
-      // Removing the last token signs the variant out. Publish that before the
-      // re-read: a failed refresh must not leave a dead account on screen.
-      const status = record['status']
-      if (typeof status === 'object' && status !== null
-        && (status as Record<string, unknown>)['state'] === 'missing') {
-        noteQuotaStatus(currentVariant.id, { status: 'signed-out', authKey: key })
-      }
+      // Sign-out is decided here, before the re-read, so a failed refresh never
+      // leaves a dead account on screen. `clear` empties every token by
+      // definition and its answer carries no `status`; `remove` reports the
+      // resulting state, where `missing` is the last token leaving.
+      const answer = record['status']
+      const signedOut = action === 'clear'
+        || (typeof answer === 'object' && answer !== null
+          && (answer as Record<string, unknown>)['state'] === 'missing')
+      if (signedOut) noteQuotaStatus(currentVariant.id, signOutDocument(key))
       await refresh()
       return true
     } catch (error: unknown) {
@@ -1383,19 +1403,18 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
         setPatAction(undefined)
       }
     }
-  }, [authKey, currentVariant.authPath, currentVariant.id, patBusy, refresh, t, trackController])
+  }, [authKey, currentVariant.authPath, currentVariant.id, patBusy, refresh, signOutDocument, t, trackController])
 
   /** Remove every saved PAT; the host answer is `{ ok: true }`, then the card re-reads. */
   const clearPat = useCallback(async (): Promise<void> => {
-    const key = authKey
     const ok = await patWrite({ action: 'clear' }, message => t('patSaveFailed', { message }), 'clear')
     if (!ok) return
     setPatDraft('')
     setReplacing(false)
-    // Publish the outcome as an authoritative fact: a read that started before the
-    // clear can no longer roll the screens back.
-    if (key !== undefined) noteQuotaStatus(currentVariant.id, { status: 'signed-out', authKey: key })
-  }, [authKey, currentVariant.id, patWrite, t])
+    // No local sign-out is published here: `patWrite` already did it before the
+    // re-read, and re-publishing from this click's snapshot would overwrite the
+    // newer host document with a state captured before the clear.
+  }, [patWrite, t])
 
   /** Make one saved entry active; the model group follows on the refresh. */
   const switchPat = useCallback(async (id: string): Promise<void> => {
@@ -1595,6 +1614,9 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
             </>
           ) : (
             <>
+          {status !== undefined && 'peerCheckSkipped' in status && status.peerCheckSkipped !== undefined
+            ? <p style={peerNoticeStyle}>{t('peerCheckSkipped', { reason: status.peerCheckSkipped })}</p>
+            : null}
           {isUnified ? (
             <>
               {/* Top section: Qoder 侧栏设置。 Held back until the first read

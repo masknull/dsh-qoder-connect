@@ -133,7 +133,8 @@ function profileLinksToThisPackage(profileDir: string): boolean {
  * from the shared `profiles/node_modules`), but a whole-tree link is refused
  * either way. With several declaring profiles, only those resolving here are
  * eligible; a tie is broken by `readdirSync` order, which is undefined — so ties
- * and "nothing eligible" both warn.
+ * and "nothing eligible" both warn. Warnings name the rejection only: each caller
+ * owns its own consequence.
  */
 function discoverProfileDir(): string | undefined {
   const profilesRoot = join(resolveDshHome(), PROFILES_DIR_NAME)
@@ -157,7 +158,7 @@ function discoverProfileDir(): string | undefined {
     if (profileNodeModulesIsLinked(only)) {
       diagnostics?.warn(
         `qoder: the only profile declaring this plugin, ${only}, links its entire node_modules elsewhere and so `
-        + `cannot be the running copy; the data directory falls back to the Harness home.`,
+        + `cannot be the running copy.`,
       )
       return undefined
     }
@@ -167,15 +168,14 @@ function discoverProfileDir(): string | undefined {
   if (eligible.length === 0) {
     diagnostics?.warn(
       `qoder: ${candidates.length} profiles declare this plugin, none holds the running copy, and the host `
-      + `reported no running profile; the data directory falls back to the Harness home. `
-      + `Candidates: ${candidates.join(', ')}`,
+      + `reported no running profile. Candidates: ${candidates.join(', ')}`,
     )
     return undefined
   }
   if (eligible.length > 1) {
     diagnostics?.warn(
       `qoder: ${eligible.length} profiles hold a copy resolving to this package and the host reported no running `
-      + `profile; the data directory follows ${eligible[0]} on nothing but directory order. `
+      + `profile; following ${eligible[0]} on nothing but directory order. `
       + `Candidates: ${eligible.join(', ')}`,
     )
   }

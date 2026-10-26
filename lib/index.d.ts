@@ -310,6 +310,11 @@ type QoderWebStatus = {
    * the document for the same reason `probeKey` does.
    */
   authKey?: string;
+  /**
+   * Which peers the load-time check could not verify, when any. Declared on the
+   * card so a check that stopped enforcing is never silent.
+   */
+  peerCheckSkipped?: string;
 } | {
   /**
    * No usable token, and the card may save one.
@@ -328,6 +333,8 @@ type QoderWebStatus = {
    * `probeKey` for why it travels with the document.
    */
   authKey?: string;
+  /** Why the load-time peer check did not run; see the signed-in arm. */
+  peerCheckSkipped?: string;
 } |
 /**
  * The host half refused to load, and `message` is that refusal verbatim.
@@ -1571,24 +1578,28 @@ declare function supportsRange(range: unknown): boolean;
  * @internal Exported for tests; the load-time check is the only caller.
  */
 declare function satisfiesRange(version: string, range: string): boolean;
+/** What the load-time peer check concluded. */
+interface PeerCheckOutcome {
+  /** A peer the host loads below its declared floor; the load must be refused. */
+  failure?: string;
+  /** Peers whose copy could not be named, so they went unenforced. */
+  unverified: readonly string[];
+}
 /**
- * Report the first peer whose resolved copy cannot run this build.
+ * Report the first peer the host loads below its declared floor.
  *
- * pnpm installs plugins with `autoInstallPeers: false`, so a stale
- * `dsh-llm`/`pi-ai` beside the plugin or in the shared profile `node_modules`
- * stays resolvable long after this build declared a floor; the first import it
- * touches dies on an unguarded `.length` read with no trace back to the version
- * gap. Runtime resolution is the only reliable check: `createRequire` resolves to
- * the exact copy Node will load, and `resolve.paths` gives the same lookup order.
+ * Only a proven mismatch refuses the load. A peer whose copy cannot be resolved
+ * or read is reported as unverified instead: the static imports already linked,
+ * so the host supplied a working copy and failing here would refuse every clean
+ * install. Unverified peers still have to reach the card, or a check that quietly
+ * stopped enforcing would look like one that passed.
  *
- * @param require_ - resolver anchored at this module.
- * @param expectations - peers to check, in the order they are reported.
- * @param warn - sink for a range this checker cannot interpret, so a guard that
- *   silently stops enforcing is visible in the host log instead of passing quiet.
- * @returns the failure text, or undefined when every peer is usable.
- * @internal Exported for tests; `apply` passes the real resolver and peer list.
+ * @param expectations - peers to check, in report order.
+ * @param warn - sink for a range it cannot interpret.
+ * @param resolveEntry - injectable resolver for tests.
+ * @internal Exported for tests.
  */
-declare function peerVersionFailure(require_?: NodeJS.Require, expectations?: readonly PeerExpectation[], warn?: (message: string) => void): string | undefined;
+declare function peerVersionFailure(expectations?: readonly PeerExpectation[], warn?: (message: string) => void, resolveEntry?: (specifier: string) => string): PeerCheckOutcome;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { CHINA_VARIANT, CN_SECTION_KEYS, Config, FALLBACK_QODER_MODELS, GLOBAL_SECTION_KEYS, GLOBAL_VARIANT, KIND_STATUS, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, QODER_AUTH_FILENAME, QODER_AUTH_PATH, QODER_DATA_DIR_ENV, QODER_DATA_DIR_NAME, QODER_GLOBAL_AUTH_PATH, QODER_GLOBAL_PROBE_PATH, QODER_GLOBAL_SETTINGS_NS, QODER_GLOBAL_STATUS_PATH, QODER_HOST_HEARTBEAT_FILENAME, QODER_PAT_ENV_CN, QODER_PAT_ENV_GLOBAL, QODER_PROBE_FILENAME, QODER_PROBE_PATH, QODER_PROVIDER, QODER_QUOTA_SETTINGS_NS, QODER_SETTINGS_NS, QODER_STATUS_PATH, QODER_STREAM_IDLE_TIMEOUT_MS, QODER_VARIANTS, QUEUE_WAIT_SECONDS_DEFAULT, QUEUE_WAIT_SECONDS_MIN, QUOTA_POLL_DEFAULT_MS, QUOTA_POLL_MIN_MS, QUOTA_SECTION_KEYS, type QoderAdapter, type QoderAuthRequest, type QoderAuthRouteOptions, type QoderAuthSaveResult, type QoderAuthStatus, QoderCatalog, type QoderCatalogFetch, type QoderCatalogModelSnapshot, QoderCatalogStore, type QoderCatalogStoreOptions, type QoderChatResult, type QoderCredential, type QoderCredentialEntry, QoderCredentialStore, type QoderCreditAccount, type QoderCredits, type QoderEffort, type QoderHostHeartbeat, type QoderModelBilling, type QoderModelInfo, type QoderModelReasoning, type QoderPatProfile, type QoderPatSummary, type QoderProbeAction, type QoderProbeRecord, QoderProbeService, type QoderProbeStatus, QoderProbeStore, type QoderProbeValidation, type QoderShim, QoderUpstreamClient, type QoderVariant, type QoderVariantId, type QoderWebCatalog, type QoderWebCreditAccount, type QoderWebCredits, type QoderWebProbeModel, type QoderWebProbeSection, type QoderWebStatus, type ShimLogger, type UpstreamErrorKind, apply, classifyUpstreamError, clearHostHeartbeat, createAuthKey, createQoderAdapter, createQoderShim, fingerprintModel, inject, isHeartbeatProcessAlive, kindFromQoderFailure, modelInfoOf, name, normalizeCredits, patTail, peerExpectations, peerVersionFailure, probeModel, qoderAuthHandler, qoderCatalogPath, qoderCredentialId, qoderCredentialIdentity, qoderHostHeartbeatPath, qoderOwnAuthPath, qoderPluginDataDir, qoderProbePath, randomSentinel, readHostHeartbeat, registerQoderAuthRoute, satisfiesRange, supportsRange, variantFor };
+export { CHINA_VARIANT, CN_SECTION_KEYS, Config, FALLBACK_QODER_MODELS, GLOBAL_SECTION_KEYS, GLOBAL_VARIANT, KIND_STATUS, PROBE_EFFORT_CANDIDATES, PeerCheckOutcome, type ProbeAttempt, type ProbeOutcome, type ProbeSender, QODER_AUTH_FILENAME, QODER_AUTH_PATH, QODER_DATA_DIR_ENV, QODER_DATA_DIR_NAME, QODER_GLOBAL_AUTH_PATH, QODER_GLOBAL_PROBE_PATH, QODER_GLOBAL_SETTINGS_NS, QODER_GLOBAL_STATUS_PATH, QODER_HOST_HEARTBEAT_FILENAME, QODER_PAT_ENV_CN, QODER_PAT_ENV_GLOBAL, QODER_PROBE_FILENAME, QODER_PROBE_PATH, QODER_PROVIDER, QODER_QUOTA_SETTINGS_NS, QODER_SETTINGS_NS, QODER_STATUS_PATH, QODER_STREAM_IDLE_TIMEOUT_MS, QODER_VARIANTS, QUEUE_WAIT_SECONDS_DEFAULT, QUEUE_WAIT_SECONDS_MIN, QUOTA_POLL_DEFAULT_MS, QUOTA_POLL_MIN_MS, QUOTA_SECTION_KEYS, type QoderAdapter, type QoderAuthRequest, type QoderAuthRouteOptions, type QoderAuthSaveResult, type QoderAuthStatus, QoderCatalog, type QoderCatalogFetch, type QoderCatalogModelSnapshot, QoderCatalogStore, type QoderCatalogStoreOptions, type QoderChatResult, type QoderCredential, type QoderCredentialEntry, QoderCredentialStore, type QoderCreditAccount, type QoderCredits, type QoderEffort, type QoderHostHeartbeat, type QoderModelBilling, type QoderModelInfo, type QoderModelReasoning, type QoderPatProfile, type QoderPatSummary, type QoderProbeAction, type QoderProbeRecord, QoderProbeService, type QoderProbeStatus, QoderProbeStore, type QoderProbeValidation, type QoderShim, QoderUpstreamClient, type QoderVariant, type QoderVariantId, type QoderWebCatalog, type QoderWebCreditAccount, type QoderWebCredits, type QoderWebProbeModel, type QoderWebProbeSection, type QoderWebStatus, type ShimLogger, type UpstreamErrorKind, apply, classifyUpstreamError, clearHostHeartbeat, createAuthKey, createQoderAdapter, createQoderShim, fingerprintModel, inject, isHeartbeatProcessAlive, kindFromQoderFailure, modelInfoOf, name, normalizeCredits, patTail, peerExpectations, peerVersionFailure, probeModel, qoderAuthHandler, qoderCatalogPath, qoderCredentialId, qoderCredentialIdentity, qoderHostHeartbeatPath, qoderOwnAuthPath, qoderPluginDataDir, qoderProbePath, randomSentinel, readHostHeartbeat, registerQoderAuthRoute, satisfiesRange, supportsRange, variantFor };

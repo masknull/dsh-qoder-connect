@@ -300,6 +300,11 @@ export type QoderWebStatus =
      * the document for the same reason `probeKey` does.
      */
     authKey?: string
+    /**
+     * Which peers the load-time check could not verify, when any. Declared on the
+     * card so a check that stopped enforcing is never silent.
+     */
+    peerCheckSkipped?: string
   }
   | {
     /**
@@ -319,6 +324,8 @@ export type QoderWebStatus =
      * `probeKey` for why it travels with the document.
      */
     authKey?: string
+    /** Why the load-time peer check did not run; see the signed-in arm. */
+    peerCheckSkipped?: string
   }
   /**
    * The host half refused to load, and `message` is that refusal verbatim.

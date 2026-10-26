@@ -1,5 +1,4 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -9,8 +8,9 @@ import { peerExpectations, peerVersionFailure, satisfiesRange } from '../src/ind
  * The load-time peer check exists because a profile installed with
  * `autoInstallPeers: false` keeps whatever copy of `dsh-llm` / `pi-ai` it first
  * resolved, and the plugin imports that copy regardless of what peer ranges
- * declare. These tests pin the two halves: the range comparison itself, and the
- * resolution walk that reads the manifest Node will actually load.
+ * declare. These tests pin the two halves: the range comparison itself, and
+ * the resolution-to-version walk that asks the host's resolver which copy it
+ * will actually load.
  */
 
 describe('peer range comparison', () => {
@@ -89,11 +89,10 @@ describe('checked peers come from the manifest', () => {
 describe('peer version resolution', () => {
   const dirs: string[] = []
 
-  /** A throwaway node_modules tree holding one package at one version. */
+  /** A throwaway package tree holding one package at one version. */
   function fixture(tree: Record<string, string | null>): string {
     const root = mkdtempSync(join(tmpdir(), 'qoder-peer-'))
     dirs.push(root)
-    writeFileSync(join(root, 'package.json'), '{"name":"fixture"}')
     for (const [spec, version] of Object.entries(tree)) {
       const dir = join(root, 'node_modules', ...spec.split('/'))
       mkdirSync(dir, { recursive: true })
@@ -102,6 +101,8 @@ describe('peer version resolution', () => {
         join(dir, 'package.json'),
         version === null ? '{ not json' : JSON.stringify({ name: spec, version }),
       )
+      // The entry file readResolvedVersion anchors its walk from.
+      writeFileSync(join(dir, 'index.js'), 'export {}')
     }
     return root
   }
@@ -112,64 +113,101 @@ describe('peer version resolution', () => {
 
   const expectations = [{ spec: '@scope/pkg', range: '>=0.2.1-rc.1' }]
 
+  /** A resolver stub that maps each spec to the entry file the host picked. */
+  function resolveEntryFrom(root: string): (specifier: string) => string {
+    return (specifier: string) =>
+      new URL(`file://${join(root, 'node_modules', ...specifier.split('/'), 'index.js').replaceAll('\\', '/')}`).href
+  }
+
   it('passes when the resolved copy meets the floor', () => {
     const root = fixture({ '@scope/pkg': '0.2.1-rc.2' })
-    expect(peerVersionFailure(createRequireFrom(root), expectations)).toBeUndefined()
+    const outcome = peerVersionFailure(expectations, undefined, resolveEntryFrom(root))
+    expect(outcome.failure).toBeUndefined()
+    expect(outcome.unverified).toEqual([])
   })
 
   it('names the spec, the range and the resolved version on a stale copy', () => {
     const root = fixture({ '@scope/pkg': '0.1.6-alpha.2' })
-    expect(peerVersionFailure(createRequireFrom(root), expectations)).toMatch(
+    expect(peerVersionFailure(expectations, undefined, resolveEntryFrom(root)).failure).toMatch(
       /@scope\/pkg@>=0\.2\.1-rc\.1.*0\.1\.6-alpha\.2/s,
     )
   })
 
-  it('reports a missing package instead of a version verdict', () => {
-    const root = fixture({})
-    expect(peerVersionFailure(createRequireFrom(root), expectations)).toMatch(/is not resolvable/)
+  it('never refuses the load over a peer it cannot resolve', () => {
+    // The static imports already linked, so a resolution that still yields no
+    // entry means missing evidence, not a broken install.
+    const outcome = peerVersionFailure(
+      expectations,
+      undefined,
+      () => { throw new Error('ERR_MODULE_NOT_FOUND') },
+    )
+    expect(outcome.failure).toBeUndefined()
+    expect(outcome.unverified).toEqual(['@scope/pkg'])
   })
 
-  it('skips an unreadable manifest rather than failing on the parse error', () => {
+  it('reports an unreadable manifest as unverified', () => {
     const root = fixture({ '@scope/pkg': null })
-    expect(peerVersionFailure(createRequireFrom(root), expectations)).toMatch(/is not resolvable/)
+    const outcome = peerVersionFailure(expectations, undefined, resolveEntryFrom(root))
+    expect(outcome.failure).toBeUndefined()
+    expect(outcome.unverified).toEqual(['@scope/pkg'])
   })
 
-  it('keeps looking past a candidate manifest that states no version', () => {
+  it('walks up from the resolved entry to the package manifest', () => {
     const outer = mkdtempSync(join(tmpdir(), 'qoder-peer-'))
     dirs.push(outer)
-    const inner = join(outer, 'proj')
-    mkdirSync(inner, { recursive: true })
-    writeFileSync(join(inner, 'package.json'), '{"name":"proj"}')
-    // Nearer candidate parses but states no version; the search must not stop here.
-    mkdirSync(join(inner, 'node_modules', '@scope', 'pkg'), { recursive: true })
+    const pkgDir = join(outer, 'node_modules', '@scope', 'pkg')
+    mkdirSync(join(pkgDir, 'dist'), { recursive: true })
     writeFileSync(
-      join(inner, 'node_modules', '@scope', 'pkg', 'package.json'),
-      JSON.stringify({ name: '@scope/pkg' }),
-    )
-    // Farther candidate is the stale copy that decides the verdict.
-    mkdirSync(join(outer, 'node_modules', '@scope', 'pkg'), { recursive: true })
-    writeFileSync(
-      join(outer, 'node_modules', '@scope', 'pkg', 'package.json'),
+      join(pkgDir, 'package.json'),
       JSON.stringify({ name: '@scope/pkg', version: '0.1.6-alpha.2' }),
     )
-    expect(peerVersionFailure(createRequireFrom(inner), expectations)).toMatch(/0\.1\.6-alpha\.2/)
+    writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export {}')
+    const resolveEntry = () =>
+      new URL(`file://${join(pkgDir, 'dist', 'index.js').replaceAll('\\', '/')}`).href
+    expect(peerVersionFailure(expectations, undefined, resolveEntry).failure).toMatch(/0\.1\.6-alpha\.2/)
+  })
+
+  it('walks past a nested manifest that is not the package itself', () => {
+    // A build stub (`{"type":"module"}`) sits closer to the entry than the real
+    // manifest; ending the walk there would fail open.
+    const outer = mkdtempSync(join(tmpdir(), 'qoder-peer-'))
+    dirs.push(outer)
+    const pkgDir = join(outer, 'node_modules', '@scope', 'pkg')
+    mkdirSync(join(pkgDir, 'dist'), { recursive: true })
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@scope/pkg', version: '0.2.1-rc.2' }))
+    writeFileSync(join(pkgDir, 'dist', 'package.json'), JSON.stringify({ type: 'module' }))
+    writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export {}')
+    const resolveEntry = () =>
+      new URL(`file://${join(pkgDir, 'dist', 'index.js').replaceAll('\\', '/')}`).href
+    expect(peerVersionFailure(expectations, undefined, resolveEntry).failure).toBeUndefined()
+  })
+
+  it('does not read a neighbouring package with a different name', () => {
+    const outer = mkdtempSync(join(tmpdir(), 'qoder-peer-'))
+    dirs.push(outer)
+    const pkgDir = join(outer, 'node_modules', '@scope', 'pkg')
+    mkdirSync(join(pkgDir, 'lib'), { recursive: true })
+    // The only manifest above the entry belongs to another package and carries a
+    // version that would pass; reading it would be a verdict about the wrong code.
+    writeFileSync(join(outer, 'package.json'), JSON.stringify({ name: 'other', version: '0.2.1-rc.2' }))
+    writeFileSync(join(pkgDir, 'lib', 'index.js'), 'export {}')
+    const resolveEntry = () =>
+      new URL(`file://${join(pkgDir, 'lib', 'index.js').replaceAll('\\', '/')}`).href
+    const outcome = peerVersionFailure(expectations, undefined, resolveEntry)
+    expect(outcome.failure).toBeUndefined()
+    expect(outcome.unverified).toEqual(['@scope/pkg'])
   })
 
   it('reports a range it cannot interpret instead of enforcing nothing quietly', () => {
     const root = fixture({ '@scope/pkg': '0.1.0' })
     const warnings: string[] = []
-    const failure = peerVersionFailure(
-      createRequireFrom(root),
+    const outcome = peerVersionFailure(
       [{ spec: '@scope/pkg', range: '*' }],
       message => warnings.push(message),
+      resolveEntryFrom(root),
     )
-    expect(failure).toBeUndefined()
+    expect(outcome.failure).toBeUndefined()
     expect(warnings.length).toBe(1)
     expect(warnings[0]).toMatch(/cannot interpret the range "\*"/)
   })
 })
-
-/** A resolver anchored at a fixture root, so lookups start inside it. */
-function createRequireFrom(root: string): NodeJS.Require {
-  return createRequire(join(root, 'package.json'))
-}

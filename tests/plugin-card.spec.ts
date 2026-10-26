@@ -349,6 +349,73 @@ describe('Qoder plugin card', () => {
     expect(inputs()).toHaveLength(1) // signed-out arm with an authKey re-offers entry
   })
 
+  it('signs out locally on clear even when the re-read fails', async () => {
+    // `clear` answers `{ok:true}` with no `status`, so the sign-out has to be
+    // decided from the action itself; a failed re-read must not leave the dead
+    // account on screen.
+    signedIn({ patProfiles: [{ id: 'id-one', patTail: 'abcd' }], activePatId: 'id-one' })
+    holdPosts = true
+    await mount()
+    expect(buttonLabels()).toContain(en.patClear)
+    await press(en.patClear)
+    statusFails = true
+    await releasePosts({ ok: true })
+    expect(buttonLabels()).not.toContain(en.patClear)
+    expect(inputs()).toHaveLength(1)
+  })
+
+  it('keeps the self-check note across a local sign-out', async () => {
+    // Clearing the last PAT synthesizes a signed-out document locally, and that
+    // parks the poll — so a note dropped there would never come back.
+    const REASON = 'could not determine the version of @scope/pkg'
+    signedIn({ patProfiles: [{ id: 'id-one', patTail: 'abcd' }], activePatId: 'id-one', peerCheckSkipped: REASON })
+    holdPosts = true
+    await mount()
+    expect(JSON.stringify(view!.toJSON())).toContain(REASON)
+    await press(en.patClear)
+    signedOut({ peerCheckSkipped: REASON })
+    await releasePosts({ ok: true })
+    expect(JSON.stringify(view!.toJSON())).toContain(REASON)
+  })
+
+  it('drops the note once a refreshed document no longer carries it', async () => {
+    // A host answer replaces the document verbatim: the field's absence is the
+    // statement that the check can verify peers again, so a stale warning must go.
+    const REASON = 'could not determine the version of @scope/pkg'
+    signedIn({ patProfiles: [{ id: 'id-one', patTail: 'abcd' }], activePatId: 'id-one', peerCheckSkipped: REASON })
+    await mount()
+    expect(JSON.stringify(view!.toJSON())).toContain(REASON)
+    signedIn({ patProfiles: [{ id: 'id-one', patTail: 'abcd' }], activePatId: 'id-one' })
+    await press(en.refresh)
+    expect(JSON.stringify(view!.toJSON())).not.toContain(REASON)
+  })
+
+  it('lets the post-clear document replace the note captured before the click', async () => {
+    // The click's snapshot is older than the host answer; the answer wins, so a
+    // note the host no longer reports must not be re-published.
+    const REASON = 'could not determine the version of @scope/pkg'
+    signedIn({ patProfiles: [{ id: 'id-one', patTail: 'abcd' }], activePatId: 'id-one', peerCheckSkipped: REASON })
+    holdPosts = true
+    await mount()
+    expect(JSON.stringify(view!.toJSON())).toContain(REASON)
+    await press(en.patClear)
+    signedOut()
+    await releasePosts({ ok: true })
+    expect(JSON.stringify(view!.toJSON())).not.toContain(REASON)
+  })
+
+  it('shows a note that only the post-clear document carries', async () => {
+    const REASON = 'could not determine the version of @scope/pkg'
+    signedIn({ patProfiles: [{ id: 'id-one', patTail: 'abcd' }], activePatId: 'id-one' })
+    holdPosts = true
+    await mount()
+    expect(JSON.stringify(view!.toJSON())).not.toContain(REASON)
+    await press(en.patClear)
+    signedOut({ peerCheckSkipped: REASON })
+    await releasePosts({ ok: true })
+    expect(JSON.stringify(view!.toJSON())).toContain(REASON)
+  })
+
   // ---- poll liveness --------------------------------------------------------
 
   it('polls while signed in and parks once a document confirms sign-out', async () => {
