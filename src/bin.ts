@@ -211,7 +211,17 @@ async function patSet(variant: QoderVariant, file: string | undefined, inline: s
   process.stdout.write(`Validating a token against ${variant.displayName} (${variant.region})…\n`)
   // Validate before writing: a saved file should always be one the plugin believes
   // works. A refusal costs one discovery call; a bad save costs every later request.
-  if (!await validateApiKey(pat, variant.region)) {
+  // An unreachable endpoint throws after its retries: that is a network condition,
+  // not a refused token, so say which one it was instead of blaming the PAT.
+  let valid: boolean
+  try {
+    valid = await validateApiKey(pat, variant.region)
+  } catch {
+    process.stderr.write(`dsh-qoder-connect: could not reach ${variant.displayName} (${variant.region}). Nothing was saved.\n`)
+    process.stderr.write('The token was never checked; retry once the connection is back.\n')
+    return 2
+  }
+  if (!valid) {
     process.stderr.write(`dsh-qoder-connect: the token was refused by ${variant.displayName} (${variant.region}). Nothing was saved.\n`)
     process.stderr.write('If this token belongs to the other Qoder product, use --provider for that one.\n')
     return 2

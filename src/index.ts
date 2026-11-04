@@ -1725,7 +1725,16 @@ export function apply(ctx: Context, config: Config): void {
         save: async (pat, label) => {
           // Validate against this variant's region before anything is written: the
           // file never holds a credential the plugin has not seen work.
-          if (!await validateApiKey(pat, runtime.variant.region)) {
+          // A network outage is not a refusal: validateApiKey throws for it after
+          // retrying. Keep it distinct so the card never tells the user to
+          // regenerate a token that was never checked.
+          let valid: boolean
+          try {
+            valid = await validateApiKey(pat, runtime.variant.region)
+          } catch {
+            return { ok: false, error: 'qoder_unreachable' as const }
+          }
+          if (!valid) {
             return { ok: false, error: 'qoder_invalid_pat' as const }
           }
           const entry = await runtime.store.add(pat, label)

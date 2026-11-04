@@ -31,7 +31,7 @@ import { PROBE_MAX_TOKENS, PROBE_PROMPT, type ProbeAttempt } from './probe.ts'
 import type { QoderCatalogModel } from './qoder/catalog.ts'
 import type { QoderRegion } from './qoder/region.ts'
 import type { QoderAccountInfo, QoderQuotaUsage } from './qoder/account.ts'
-import { qoderQueueSignal } from './qoder/errors.ts'
+import { qoderQueueSignal, QoderLlmError } from './qoder/errors.ts'
 import { qoderResultCode } from './qoder/codes.ts'
 import { createQoderTransport, type QoderCheckInResult, type QoderTransport } from './qoder/transport/index.ts'
 import type { QoderModelBilling, QoderModelInfo, QoderModelReasoning } from './catalog.ts'
@@ -178,7 +178,11 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
     if (lower.includes(marker)) return 'auth'
   }
   if (status === 408) return 'timeout'
-  if (status === 0 || status >= 500) return 'server'
+  // A status of 0 means the request never received a response at all, so there is
+  // no server verdict to report: the network dropped it. Reading that as 'server'
+  // makes a local outage look like an upstream 5xx.
+  if (status === 0) return 'timeout'
+  if (status >= 500) return 'server'
   return 'client'
 }
 
@@ -212,9 +216,37 @@ export function kindFromQoderFailure(failure: { code: string; status?: number | 
   // A timeout keeps its own kind so the shim can answer 408: pi-ai reads a 5xx
   // number as SERVER before it ever tests for a timeout.
   if (failure.code === 'TIMEOUT') return 'timeout'
-  // SERVER, EMPTY_RESPONSE, MALFORMED_RESPONSE, TRANSPORT, PROVIDER_ERROR, and
-  // anything unrecognized: a server-side condition.
+  // TRANSPORT means the request never got a response: a dropped connection, a
+  // stalled TLS handshake, a DNS failure. The upstream never answered, so the shim
+  // must not claim it did. 408 keeps the host retrying, and keeps the card from
+  // reading a local outage as a server fault.
+  if (failure.code === 'TRANSPORT') return 'timeout'
+  // SERVER, EMPTY_RESPONSE, MALFORMED_RESPONSE, PROVIDER_ERROR, and anything
+  // unrecognized: a server-side condition.
   return 'server'
+}
+
+/** How many times a save validates before it reports the endpoint as unreachable. */
+const validateAttempts = 3
+
+/** Base backoff between validation attempts; each retry waits one more step. */
+const validateRetryDelayMs = 400
+
+/**
+ * Whether a validation failure carried no verdict from the upstream, which makes it
+ * a network condition rather than a rejection of the credential.
+ *
+ * A documented refusal — a 401/403, an auth code, a policy code — answers the
+ * question the card asked, so it stays a `false`. Everything that never reached the
+ * server (TRANSPORT), or reached it and got no usable answer (TIMEOUT, 5xx), is
+ * retried and finally reported as an error. Errors outside the transport's own
+ * taxonomy keep the old answer: the token could not be saved.
+ */
+function isUnreachableFailure(error: unknown): boolean {
+  if (!(error instanceof QoderLlmError)) return false
+  const { code, status } = error.failure
+  if (code === 'TRANSPORT' || code === 'TIMEOUT') return true
+  return typeof status === 'number' && status >= 500
 }
 
 /** Whether a Personal Access Token works against one region's endpoints. */
@@ -225,20 +257,36 @@ export async function validateApiKey(
 ): Promise<boolean> {
   const trimmed = pat.trim()
   if (trimmed === '') return false
-  try {
-    const transport = createQoderTransport({
-      region,
-      resolvePat: async () => trimmed,
-      ...options.fetch === undefined ? {} : { fetch: options.fetch },
-      metadataTimeoutMs: options.timeoutMs ?? 15_000,
-    })
-    await transport.discoverModels(AbortSignal.timeout(options.timeoutMs ?? 15_000))
-    return true
-  } catch {
-    // Any failure — bad token, unreachable endpoint, timeout — answers the
-    // card's one question the same way: this token cannot be saved.
-    return false
+  const timeoutMs = options.timeoutMs ?? 15_000
+  let lastTransportError: unknown
+  // A refused token and an unreachable endpoint are different answers, and the card
+  // asks both of them here. Retry the ones that carry no verdict from the upstream,
+  // and let them leave as an error instead of a refusal: a dropped connection says
+  // nothing about the credential, and reporting it as one sends the user to
+  // regenerate a token that was never the problem.
+  for (let attempt = 0; attempt < validateAttempts; attempt++) {
+    try {
+      const transport = createQoderTransport({
+        region,
+        resolvePat: async () => trimmed,
+        ...options.fetch === undefined ? {} : { fetch: options.fetch },
+        metadataTimeoutMs: timeoutMs,
+      })
+      await transport.discoverModels(AbortSignal.timeout(timeoutMs))
+      return true
+    } catch (error) {
+      if (!isUnreachableFailure(error)) return false
+      lastTransportError = error
+      if (attempt + 1 < validateAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, validateRetryDelayMs * (attempt + 1)))
+      }
+    }
   }
+  throw new QoderLlmError(
+    `The ${region} endpoint could not be reached; the token was never refused.`,
+    'TRANSPORT',
+    { cause: lastTransportError },
+  )
 }
 
 /** A request the OpenAI layer itself could not accept; the shim answers 400. */

@@ -161,7 +161,10 @@ export class QoderAuthService {
     let jobToken: string
     let expiresAt = Date.now() + defaultExpiryMs
 
-    const data = await openApiJsonRequest<{ token?: string; expires_at?: string; expires_in?: number }>(
+    // Every other metadata read (models, usage, userinfo) retries once; the exchange
+    // is the first request in the chain, so a single dropped connection used to take
+    // down the whole login and make a valid PAT look unusable.
+    const data = await retryMetadataRead(signal, () => openApiJsonRequest<{ token?: string; expires_at?: string; expires_in?: number }>(
       this.fetchImpl,
       {
         url: getQoderExchangeUrl(this.region),
@@ -172,7 +175,7 @@ export class QoderAuthService {
         operation: 'Auth',
         logCategory: 'auth.exchange',
       },
-    )
+    ))
     if (!data.token) {
       throw new QoderLlmError('Qoder PAT exchange returned no job token.', 'AUTH')
     }
