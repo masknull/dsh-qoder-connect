@@ -1309,9 +1309,13 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
         return
       }
       if (record['ok'] !== true) {
-        setPatError(detail === 'qoder_invalid_pat' || detail === 'qoder_missing_pat'
-          ? t('patInvalid')
-          : t('patSaveFailed', { message: detail }))
+        // An unreachable endpoint is not a rejected token: the PAT was never
+        // checked, so do not send the user off to regenerate it.
+        setPatError(detail === 'qoder_unreachable'
+          ? t('patUnreachable')
+          : detail === 'qoder_invalid_pat' || detail === 'qoder_missing_pat'
+            ? t('patInvalid')
+            : t('patSaveFailed', { message: detail }))
         return
       }
       setPatDraft('')

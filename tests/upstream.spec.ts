@@ -350,6 +350,16 @@ describe('kindFromQoderFailure and classifyUpstreamError', () => {
     expect(kindFromQoderFailure({ code: 'WEIRD_NEW_THING' })).toBe('server')
   })
 
+  it('keeps a failed connection out of the server bucket', () => {
+    // TRANSPORT means the request never reached Qoder: reporting an upstream 5xx
+    // would blame the server for a local outage, and 502 makes pi-ai treat the
+    // failure as non-retryable before it ever sees the timeout.
+    expect(kindFromQoderFailure({ code: 'TRANSPORT' })).toBe('timeout')
+    // A real 5xx answer from the upstream is still a server failure.
+    expect(kindFromQoderFailure({ code: 'SERVER', status: 503 })).toBe('server')
+    expect(kindFromQoderFailure({ code: 'AUTH', status: 401 })).toBe('auth')
+  })
+
   it('routes Qoder queue answers to soft_rate even with a 401/403 status', () => {
     // A queue answer keeps its 401/403 status, so the auth arm must not claim it
     // by status first: that renders as a dead credential and nothing retries it.
@@ -435,7 +445,9 @@ describe('kindFromQoderFailure and classifyUpstreamError', () => {
     expect(classifyUpstreamError(200, 'Token Expired')).toBe('auth')
     expect(classifyUpstreamError(200, 'please THROTTLEx your retries')).toBe('soft_rate')
     expect(classifyUpstreamError(500, 'boom')).toBe('server')
-    expect(classifyUpstreamError(0, 'socket died')).toBe('server')
+    // Status 0 means no response arrived at all: the upstream never answered, so
+    // this is a local network failure, not an upstream 5xx.
+    expect(classifyUpstreamError(0, 'socket died')).toBe('timeout')
     expect(classifyUpstreamError(404, 'no such model')).toBe('client')
   })
 
@@ -912,12 +924,47 @@ describe('validateApiKey', () => {
     expect(await built.resolvePat()).toBe('pt-good')
   })
 
-  it('refuses a token whose discovery call fails — any failure', async () => {
+  it('refuses a token whose discovery call is rejected by the upstream', async () => {
     createTransportMock.mockReturnValue({
       stream: () => { throw new Error('nope') },
       discoverModels: async () => { throw new QoderLlmError('bad pat', 'AUTH', { status: 401 }) },
       readAccount: async () => { throw new Error('nope') },
     })
     await expect(validateApiKey('pt-bad', 'china')).resolves.toBe(false)
+    // No retries for a verdict the upstream actually returned.
+    expect(createTransportMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a dropped connection instead of calling the token invalid', async () => {
+    // Transport-level failures carry no status: LlmError only accepts 100-599.
+    let calls = 0
+    createTransportMock.mockReturnValue({
+      stream: () => { throw new Error('not used') },
+      discoverModels: async () => {
+        calls++
+        throw new QoderLlmError('network request failed', 'TRANSPORT')
+      },
+      readAccount: async () => { throw new Error('not used') },
+    })
+    await expect(validateApiKey('pt-good', 'china', { timeoutMs: 100 })).rejects.toThrow(
+      /endpoint could not be reached/,
+    )
+    expect(calls).toBe(3)
+    // A network outage is not a refusal: the token was never checked.
+  })
+
+  it('still accepts a token when only the first discovery call drops', async () => {
+    let calls = 0
+    createTransportMock.mockReturnValue({
+      stream: () => { throw new Error('not used') },
+      discoverModels: async () => {
+        calls++
+        if (calls === 1) throw new QoderLlmError('network request failed', 'TRANSPORT')
+        return []
+      },
+      readAccount: async () => { throw new Error('not used') },
+    })
+    await expect(validateApiKey('pt-good', 'china', { timeoutMs: 100 })).resolves.toBe(true)
+    expect(calls).toBe(2)
   })
 })
