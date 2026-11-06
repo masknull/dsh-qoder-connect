@@ -20,6 +20,8 @@ import type { QoderProbeRecord } from './probe-store.ts'
 import { retryAfterFromMessage, type QoderShim } from './shim.ts'
 import { normalizeCredits } from './upstream.ts'
 import { qoderSessionHeaders, withQoderRequestPurpose } from './request-session.ts'
+import { QoderTurnTracker } from './qoder/transport/wire/turn-identity.ts'
+import type { QoderTurnIdentity } from './qoder/transport/wire/turn-identity.ts'
 
 /** Default provider route owned by this bundle (the China variant). */
 export const QODER_PROVIDER = 'qoder'
@@ -366,11 +368,31 @@ function isJsonObjectText(text: string): boolean {
  * dropped: catalog membership is advisory.
  */
 class QoderPiAiAdapter extends PiAiAdapter {
+  /**
+   * The agent run every step of one turn reports.
+   *
+   * One DSH turn is many model requests, and Qoder's Credits panel aggregates a
+   * usage record per `business.id`. Resolving the run here — where the request's
+   * durable messages still carry their ids and producer kinds — is what keeps a
+   * whole turn on one record; pi-ai's own `Context` has already dropped both by
+   * the time a provider sees it.
+   */
+  private readonly turns = new QoderTurnTracker()
+
   constructor(
     private readonly catalog: QoderCatalog,
     options: ConstructorParameters<typeof PiAiAdapter>[0],
   ) {
     super(options)
+  }
+
+  /** Run identity for one request, resolved from its messages and its purpose. */
+  private turnFor(options: GenerateOptions): QoderTurnIdentity {
+    return this.turns.resolve(
+      options.sessionId === undefined ? undefined : String(options.sessionId),
+      options.messages,
+      options.purpose === undefined ? 'conversation' : 'auxiliary',
+    )
   }
 
   /** Catalog entry for one model id, or undefined when the catalog omits it. */
@@ -403,7 +425,8 @@ class QoderPiAiAdapter extends PiAiAdapter {
    */
   override async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     yield* withQoderRequestPurpose(options.purpose,
-      rejectDamagedToolArguments(this.withRetryHint(super.stream(options))))
+      rejectDamagedToolArguments(this.withRetryHint(super.stream(options))),
+      this.turnFor(options))
   }
 
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
@@ -412,7 +435,8 @@ class QoderPiAiAdapter extends PiAiAdapter {
       ...prepared,
       model: normalizeReasoning(prepared.model),
       stream: (options: GenerateOptions) => withQoderRequestPurpose(options.purpose,
-        rejectDamagedToolArguments(this.withRetryHint(prepared.stream(options)))),
+        rejectDamagedToolArguments(this.withRetryHint(prepared.stream(options))),
+        this.turnFor(options)),
     }
   }
 

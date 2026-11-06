@@ -8,6 +8,7 @@ import type { QoderRegion } from '../region.ts'
 import type { QoderCheckInResult } from './checkin.ts'
 import type { QoderQueueWait } from './chat.ts'
 import type { QoderSseNotice } from './wire/sse.ts'
+import type { QoderTurnIdentity } from './wire/turn-identity.ts'
 import { DefaultQoderTransport, defaultStreamIdleTimeoutMs } from './default-transport.ts'
 import { defaultResponseHeaderTimeoutMs } from './request.ts'
 import type { QoderLogger } from './logging.ts'
@@ -16,7 +17,16 @@ export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs }
 export type { QoderCheckInResult }
 
 export interface QoderTransport {
-  stream(options: GenerateOptions, model?: QoderCatalogModel): AsyncIterable<StreamChunk>
+  /**
+   * Stream one model call.
+   *
+   * @param options - the assembled request.
+   * @param model - the catalog row the request addresses.
+   * @param turn - agent run this call belongs to. Every step of one DSH turn
+   *   passes the same identity so the upstream bills the turn as one usage
+   *   record; omitting it makes the call its own record.
+   */
+  stream(options: GenerateOptions, model?: QoderCatalogModel, turn?: QoderTurnIdentity): AsyncIterable<StreamChunk>
   discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]>
   readAccount(options?: { force?: boolean | undefined; signal?: AbortSignal | undefined }): Promise<QoderAccountInfo>
   checkIn(signal?: AbortSignal): Promise<QoderCheckInResult>
