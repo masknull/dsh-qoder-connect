@@ -85,6 +85,50 @@ test('auxiliary calls get their own run and never displace the turn', () => {
   assert.equal(back.stage, 'processing')
 })
 
+test('one conversation\'s auxiliary calls group with each other, not with another\'s', () => {
+  const tracker = new QoderTurnTracker()
+  const titleA = tracker.resolve('session-a', [prompt('title a', 'a1')], 'auxiliary')
+  const titleA2 = tracker.resolve('session-a', [prompt('title a again', 'a2')], 'auxiliary')
+  const titleB = tracker.resolve('session-b', [prompt('title b', 'b1')], 'auxiliary')
+
+  // One conversation's two title calls are one run, as before.
+  assert.equal(titleA.businessId, titleA2.businessId)
+  assert.equal(titleA.stage, 'start')
+  assert.equal(titleA2.stage, 'processing')
+  // Two conversations are two runs. `requestSetId` is the upstream queue key, so
+  // sharing one would have each poll, and read the grant of, the other's entry.
+  assert.notEqual(titleA.businessId, titleB.businessId)
+  assert.notEqual(titleA.requestSetId, titleB.requestSetId)
+})
+
+test('one conversation\'s title and compaction calls share a window', () => {
+  const tracker = new QoderTurnTracker()
+  const title = tracker.resolve('session-1', [prompt('title', 'x1')], 'auxiliary')
+  const compaction = tracker.resolve('session-1', [prompt('compact', 'x2')], 'auxiliary')
+  // Both are auxiliary work for the same conversation, so they group; the window
+  // is per conversation, not per purpose.
+  assert.equal(title.businessId, compaction.businessId)
+  assert.equal(compaction.stage, 'processing')
+})
+
+test('an auxiliary window never spans two conversations', () => {
+  const tracker = new QoderTurnTracker()
+  const a = tracker.resolve('session-a', [prompt('title a', 'x1')], 'auxiliary')
+  const b = tracker.resolve('session-b', [prompt('title b', 'x2')], 'auxiliary')
+  assert.notEqual(a.businessId, b.businessId)
+  assert.notEqual(a.requestSetId, b.requestSetId)
+})
+
+test('session-less callers never share a queue key', () => {
+  const tracker = new QoderTurnTracker()
+  const a = tracker.resolve(undefined, [prompt('anonymous a', 'x1')], 'conversation')
+  const b = tracker.resolve(undefined, [prompt('anonymous b', 'x2')], 'conversation')
+  // Neither named a conversation, so there is nothing to group them by: two
+  // unrelated callers must not share an upstream queue entry.
+  assert.notEqual(a.businessId, b.businessId)
+  assert.notEqual(a.requestSetId, b.requestSetId)
+})
+
 test('a repeated prompt after compaction opens a fresh run', () => {
   const tracker = new QoderTurnTracker()
   const first = prompt('do the thing', 'm1')

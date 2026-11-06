@@ -51,6 +51,25 @@ const defaultIdleSessionTtlMs = 60 * 60 * 1000
 /** Auxiliary calls (title, compaction) group in a short fixed window. */
 const defaultAuxiliaryWindowTtlMs = 5 * 60 * 1000
 
+/**
+ * Window scope for auxiliary calls, or undefined when a call must stand alone.
+ *
+ * A window groups one conversation's own auxiliary calls and nothing else.
+ * Two conversations must not share one: `requestSetId` is the upstream queue
+ * key, so a shared window makes each consumer poll — and read the grant of —
+ * the other's queue entry, and bills both onto one usage record. A call that
+ * named no conversation has nothing to group by, so it stands alone rather
+ * than borrowing an unrelated caller's key.
+ *
+ * @param kind - whether the call is auxiliary or an ordinary conversation.
+ * @param sessionId - the conversation the caller named, when it named one.
+ * @returns the key this call's window is stored under, or undefined for none.
+ */
+function windowScope(kind: QoderCallKind, sessionId: string | undefined): string | undefined {
+  if (kind !== 'auxiliary') return undefined
+  return sessionId === undefined || sessionId.length === 0 ? undefined : `auxiliary:${sessionId}`
+}
+
 interface SessionTurnState {
   /** Human messages this run has claimed, keyed by {@link promptKey}. */
   readonly claimed: Set<string>
@@ -180,7 +199,10 @@ export class QoderTurnTracker {
     const now = this.now()
     const prompts = humanPrompts(messages)
     if (kind === 'auxiliary' || sessionId === undefined || sessionId.length === 0) {
-      return this.windowIdentity(kind === 'auxiliary' ? 'aux' : 'anon', prompts, now)
+      const scope = windowScope(kind, sessionId)
+      // Nothing to group by: this call is its own run, as it was before windows.
+      if (scope === undefined) return this.standaloneIdentity(prompts, now)
+      return this.windowIdentity(scope, prompts, now)
     }
 
     const state = this.sessions.get(sessionId)
@@ -269,7 +291,14 @@ export class QoderTurnTracker {
     }
   }
 
-  /** Auxiliary and session-less calls group in a short fixed window. */
+  /**
+   * Group one conversation's own auxiliary calls in a short fixed window.
+   *
+   * @param scope - {@link windowScope}: one window per conversation.
+   * @param prompts - the request's human prompts, for the panel label.
+   * @param now - this request's clock reading.
+   * @returns `start` for the first call in a window, `processing` for the rest.
+   */
   private windowIdentity(
     scope: string,
     prompts: readonly PromptKey[],
@@ -280,16 +309,27 @@ export class QoderTurnTracker {
       return { ...existing.identity, stage: 'processing' }
     }
     this.pruneAuxiliary(now)
+    const identity = this.standaloneIdentity(prompts, now)
+    this.auxiliary.set(scope, { expiresAt: now + this.auxiliaryWindowTtlMs, identity })
+    return identity
+  }
+
+  /**
+   * Open a run that belongs to this call alone.
+   *
+   * @param prompts - the request's human prompts, for the panel label.
+   * @param now - this request's clock reading.
+   * @returns a `start` identity whose queue key no other call shares.
+   */
+  private standaloneIdentity(prompts: readonly PromptKey[], now: number): QoderTurnIdentity {
     const businessId = crypto.randomUUID()
-    const identity: QoderTurnIdentity = {
+    return {
       requestSetId: businessId,
       businessId,
       beginAt: now,
       stage: 'start',
       businessName: businessNameOf(prompts.at(-1)?.text ?? ''),
     }
-    this.auxiliary.set(scope, { expiresAt: now + this.auxiliaryWindowTtlMs, identity })
-    return identity
   }
 
   /** Drop expired windows; they are short-lived, so the map stays small. */
