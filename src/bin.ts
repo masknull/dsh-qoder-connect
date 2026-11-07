@@ -213,15 +213,15 @@ async function patSet(variant: QoderVariant, file: string | undefined, inline: s
   // works. A refusal costs one discovery call; a bad save costs every later request.
   // An unreachable endpoint throws after its retries: that is a network condition,
   // not a refused token, so say which one it was instead of blaming the PAT.
-  let valid: boolean
+  let verdict: Awaited<ReturnType<typeof validateApiKey>>
   try {
-    valid = await validateApiKey(pat, variant.region)
+    verdict = await validateApiKey(pat, variant.region)
   } catch {
     process.stderr.write(`dsh-qoder-connect: could not reach ${variant.displayName} (${variant.region}). Nothing was saved.\n`)
     process.stderr.write('The token was never checked; retry once the connection is back.\n')
     return 2
   }
-  if (!valid) {
+  if (verdict === 'invalid') {
     process.stderr.write(`dsh-qoder-connect: the token was refused by ${variant.displayName} (${variant.region}). Nothing was saved.\n`)
     process.stderr.write('If this token belongs to the other Qoder product, use --provider for that one.\n')
     return 2
@@ -232,6 +232,7 @@ async function patSet(variant: QoderVariant, file: string | undefined, inline: s
     `Saved and activated in ${store.ownAuthPath()}${status.pat?.patTail === undefined ? '' : ` (tail …${status.pat.patTail})`}`,
     `${status.profiles?.length ?? 1} saved token(s); switch with \`dsh-qoder-connect pat use <id>\`.`,
     'The running plugin picks the token up on its next sweep; no restart needed.',
+    ...verdict === 'no_models' ? ['Warning: the account lists no enabled model — nothing will run until it has a plan with models.'] : [],
     '',
   ].join('\n'))
   return 0

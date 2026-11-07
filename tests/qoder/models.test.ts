@@ -227,7 +227,7 @@ test('fetchQoderModels calls the encoded Global catalog with COSY authentication
   })
 
   assert.equal(models[0]?.id, 'reasoner')
-  assert.equal(request?.url, 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1')
+  assert.equal(request?.url, 'https://api2.qoder.sh/algo/api/v2/model/list?Encode=1')
   assert.equal(request?.init?.method, 'GET')
   const headers = request?.init?.headers as Record<string, string>
   assert.match(headers.Authorization!, /^Bearer COSY\./u)
@@ -240,11 +240,11 @@ test('fetchQoderModels calls the encoded Global catalog with COSY authentication
   }), [
     {
       message: '[Qoder Models] Requesting model catalog',
-      details: { url: 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1' },
+      details: { url: 'https://api2.qoder.sh/algo/api/v2/model/list?Encode=1' },
     },
     {
       message: '[Qoder Models] Catalog request completed',
-      details: { url: 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1', status: 200 },
+      details: { url: 'https://api2.qoder.sh/algo/api/v2/model/list?Encode=1', status: 200 },
     },
   ])
 })

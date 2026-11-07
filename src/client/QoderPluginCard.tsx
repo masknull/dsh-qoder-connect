@@ -1321,7 +1321,9 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
       setPatDraft('')
       setPatLabelDraft('')
       setReplacing(false)
-      setPatNotice(t('patSaved'))
+      // A free-plan PAT saves but lists no model: surface it as a warning, not a
+      // saved-OK notice, so the user knows the account is on file yet unusable.
+      setPatNotice(record['warning'] === 'qoder_no_models' ? t('patNoModels') : t('patSaved'))
       noteQuotaSignIn(currentVariant.id, true)
       await refresh()
     } catch (error: unknown) {
@@ -1748,7 +1750,9 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
                           ? t('catalogLive', { time: formatTime(status.catalog.fetchedAt) })
                           : status.catalog.source === 'saved' && status.catalog.fetchedAt !== undefined
                             ? t('catalogSaved', { time: formatTime(status.catalog.fetchedAt) })
-                            : t('catalogFallback')}
+                            : status.catalog.error === 'qoder_no_models'
+                              ? null
+                              : t('catalogFallback')}
                       </span>}
                   <button
                     type="button"
@@ -1761,7 +1765,7 @@ export function QoderPluginCard(props: QoderPluginCardProps) {
                 </div>
                 {status.catalog?.error === undefined
                   ? null
-                  : <p style={errorStyle}>{t('catalogError', { message: status.catalog.error })}</p>}
+                  : <p style={errorStyle}>{status.catalog.error === 'qoder_no_models' ? t('catalogNoModels') : t('catalogError', { message: status.catalog.error })}</p>}
                 <div role="tablist" style={tabBarStyle}>
                   {(['status', 'context', 'models', 'details', 'checkin'] as const).map(id => (
                     <button

@@ -285,7 +285,7 @@ describe('catalog lifecycle', () => {
     expect(lists).toBe(1)
   })
 
-  it('keeps the fallback roster and retries after a failed fetch', async () => {
+  it('serves no roster after a failed fetch and retries once the upstream answers', async () => {
     const { cnPath } = await useRoot()
     await writeFile(cnPath, credentialDocument(PAT_A))
 
@@ -303,10 +303,9 @@ describe('catalog lifecycle', () => {
     }))
 
     const ctx = await boot()
-    // The failed fetch leaves the per-variant fallback serving: the group is
-    // visible and usable rather than empty.
+    // The failed fetch clears the group: no fallback models appear as if live.
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('qoder')).map(model => model.id)).toContain('auto')
+      expect((await ctx.llm.listModels('qoder'))).toEqual([])
     }, { timeout: 10_000 })
 
     // Without the retry, a startup network blip needed a manual refresh to recover.
@@ -495,7 +494,9 @@ describe('catalog lifecycle', () => {
     expect(String(after.catalog.error)).toMatch(/503|status/u)
     const serving = (await ctx.llm.listModels('qoder')).map(model => model.id)
     expect(serving).not.toContain('acct-a-model')
-    expect(serving).toContain('auto')
+    // A failed fetch serves no roster at all — no fallback models masquerading
+    // as live ones.
+    expect(serving).toEqual([])
 
     // Recovery: the same manual action once the upstream answers again.
     failCatalog = false

@@ -26,7 +26,7 @@ const MAX_BODY_BYTES = 16 * 1024
 
 /** Outcome of a save/activate/remove attempt: stored, or refused with a stable reason. */
 export type QoderAuthSaveResult =
-  | { ok: true; status: QoderAuthStatus }
+  | { ok: true; status: QoderAuthStatus; warning?: 'qoder_no_models' }
   | { ok: false; error: 'qoder_invalid_pat' | 'qoder_missing_pat' | 'qoder_unknown_pat' | 'qoder_unreachable' }
 
 /** Constructor dependencies. */

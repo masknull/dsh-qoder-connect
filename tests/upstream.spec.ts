@@ -907,8 +907,8 @@ describe('probeEffort', () => {
 // ---------------------------------------------------------------------------
 
 describe('validateApiKey', () => {
-  it('answers false for a blank token without building a transport', async () => {
-    await expect(validateApiKey('   ', 'china')).resolves.toBe(false)
+  it('answers invalid for a blank token without building a transport', async () => {
+    await expect(validateApiKey('   ', 'china')).resolves.toBe('invalid')
     expect(createTransportMock).not.toHaveBeenCalled()
   })
 
@@ -918,7 +918,7 @@ describe('validateApiKey', () => {
       discoverModels: async (signal?: AbortSignal) => { void signal; return [] },
       readAccount: async () => { throw new Error('not used') },
     })
-    await expect(validateApiKey('pt-good', 'global')).resolves.toBe(true)
+    await expect(validateApiKey('pt-good', 'global')).resolves.toBe('valid')
     const built = createTransportMock.mock.calls[0]![0] as { region: string; resolvePat: () => Promise<string> }
     expect(built.region).toBe('global')
     expect(await built.resolvePat()).toBe('pt-good')
@@ -930,7 +930,7 @@ describe('validateApiKey', () => {
       discoverModels: async () => { throw new QoderLlmError('bad pat', 'AUTH', { status: 401 }) },
       readAccount: async () => { throw new Error('nope') },
     })
-    await expect(validateApiKey('pt-bad', 'china')).resolves.toBe(false)
+    await expect(validateApiKey('pt-bad', 'china')).resolves.toBe('invalid')
     // No retries for a verdict the upstream actually returned.
     expect(createTransportMock).toHaveBeenCalledTimes(1)
   })
@@ -964,7 +964,18 @@ describe('validateApiKey', () => {
       },
       readAccount: async () => { throw new Error('not used') },
     })
-    await expect(validateApiKey('pt-good', 'china', { timeoutMs: 100 })).resolves.toBe(true)
+    await expect(validateApiKey('pt-good', 'china', { timeoutMs: 100 })).resolves.toBe('valid')
     expect(calls).toBe(2)
+  })
+
+  it('reports no_models when the account clears auth but lists no enabled model', async () => {
+    createTransportMock.mockReturnValue({
+      stream: () => { throw new Error('not used') },
+      discoverModels: async () => { throw new QoderLlmError('no enabled models', 'EMPTY_RESPONSE') },
+      readAccount: async () => { throw new Error('not used') },
+    })
+    await expect(validateApiKey('pt-free', 'global')).resolves.toBe('no_models')
+    // An empty catalog is a verdict, not a retryable failure.
+    expect(createTransportMock).toHaveBeenCalledTimes(1)
   })
 })

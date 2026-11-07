@@ -8,6 +8,7 @@ import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-t
 import type { QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
 import type { CosyCredentials } from './cosy.ts'
+import { qoderIdeVersion } from './cosy.ts'
 import type { QoderTurnIdentity } from './turn-identity.ts'
 
 function stableHash(prefix: string, ...inputs: string[]): string {
@@ -209,7 +210,9 @@ export async function buildQoderRequestBody(
     },
     business: {
       product: 'cli',
-      version: '1.0.0',
+      // The official client stamps its own app version here; it tracks
+      // qoderIdeVersion, not a frozen string.
+      version: qoderIdeVersion,
       type: 'agent',
       // `start` opens the run, `processing` continues it. The Credits panel
       // aggregates on `id`, so every step of one turn reports the same one.

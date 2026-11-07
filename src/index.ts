@@ -24,6 +24,7 @@ import { createQoderShim } from './shim.ts'
 import { QoderProbeService } from './probe-service.ts'
 import { newestFirst, QoderProbeStore, qoderProbePath } from './probe-store.ts'
 import { QoderUpstreamClient, validateApiKey } from './upstream.ts'
+import { QoderLlmError } from './qoder/errors.ts'
 import { createQoderTransport, defaultStreamIdleTimeoutMs, type QoderCheckInResult, type QoderTransport } from './qoder/transport/index.ts'
 import { getMachineId } from './qoder/transport/machine-id.ts'
 import { configurePluginPaths, qoderMachineIdPath, qoderPluginDataDir, qoderStateDir } from './paths.ts'
@@ -1728,13 +1729,13 @@ export function apply(ctx: Context, config: Config): void {
           // A network outage is not a refusal: validateApiKey throws for it after
           // retrying. Keep it distinct so the card never tells the user to
           // regenerate a token that was never checked.
-          let valid: boolean
+          let verdict: Awaited<ReturnType<typeof validateApiKey>>
           try {
-            valid = await validateApiKey(pat, runtime.variant.region)
+            verdict = await validateApiKey(pat, runtime.variant.region)
           } catch {
             return { ok: false, error: 'qoder_unreachable' as const }
           }
-          if (!valid) {
+          if (verdict === 'invalid') {
             return { ok: false, error: 'qoder_invalid_pat' as const }
           }
           const entry = await runtime.store.add(pat, label)
@@ -1743,9 +1744,14 @@ export function apply(ctx: Context, config: Config): void {
           adoptIdentity(runtime, identity)
           // AWAIT the fetch: the card re-reads status the moment this answer lands.
           // `fetchCatalog` contains its own failures, so a bad upstream cannot fail
-          // a valid save.
+          // a valid save. An account with no enabled model still saves; the card
+          // surfaces the empty roster as a warning rather than a refusal.
           await fetchCatalog(runtime, identity)
-          return { ok: true, status: await runtime.store.status() }
+          return {
+            ok: true,
+            status: await runtime.store.status(),
+            ...verdict === 'no_models' ? { warning: 'qoder_no_models' as const } : {},
+          }
         },
         activate: async id => {
           const entry = await runtime.store.activate(id)
@@ -2000,11 +2006,19 @@ export function apply(ctx: Context, config: Config): void {
         // attempt's failure must not overwrite the newer state.
         if (stopped || runtime.catalogGeneration !== generation) return
         runtime.lastFetchAtMs = Date.now()
-        runtime.catalogError = error instanceof Error ? error.message.slice(0, 300) : String(error)
+        // An enabled-model answer of zero is the account's state, not a fetch
+        // error to dump raw on the card: the card reads it as "no models".
+        runtime.catalogError = error instanceof QoderLlmError && error.failure.code === 'EMPTY_RESPONSE'
+          ? 'qoder_no_models'
+          : error instanceof Error ? error.message.slice(0, 300) : String(error)
         ctx.logger.warn(
-          `dsh-qoder-connect: ${runtime.variant.displayName} catalog unavailable; serving the fallback list`,
+          `dsh-qoder-connect: ${runtime.variant.displayName} catalog unavailable`,
           error,
         )
+        // A failed fetch serves no roster: showing the compiled-in fallback as if
+        // it were live would advertise models the account may not have.
+        runtime.catalog.set([])
+        runtime.catalogSource = 'fallback'
         runtime.invalidate()
         return
       }

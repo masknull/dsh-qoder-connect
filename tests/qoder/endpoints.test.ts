@@ -14,7 +14,7 @@ import { computeSigPath } from '../../src/qoder/transport/wire/cosy.ts'
 
 test('resolveQoderEndpoints returns expected endpoints for global and china', () => {
   const globalEndpoints = resolveQoderEndpoints('global')
-  assert.equal(globalEndpoints.baseUrl, 'https://api3.qoder.sh/')
+  assert.equal(globalEndpoints.baseUrl, 'https://api2.qoder.sh/')
   assert.equal(globalEndpoints.openApiUrl, 'https://openapi.qoder.sh')
 
   const chinaEndpoints = resolveQoderEndpoints('china')
@@ -28,7 +28,7 @@ test('resolveQoderEndpoints returns expected endpoints for global and china', ()
 test('getQoderChatUrl builds chat URLs for global and china', () => {
   assert.equal(
     getQoderChatUrl('global'),
-    'https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1',
+    'https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1',
   )
   assert.equal(
     getQoderChatUrl('china'),
@@ -40,7 +40,7 @@ test('getQoderChatUrl builds chat URLs for global and china', () => {
 test('getQoderModelListUrl builds model catalog URLs for global and china', () => {
   assert.equal(
     getQoderModelListUrl('global'),
-    'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1',
+    'https://api2.qoder.sh/algo/api/v2/model/list?Encode=1',
   )
   assert.equal(
     getQoderModelListUrl('china'),

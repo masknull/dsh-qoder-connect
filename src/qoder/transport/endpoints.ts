@@ -13,7 +13,9 @@ export interface QoderRegionEndpoints {
 
 export const qoderRegionEndpoints: Record<QoderRegion, QoderRegionEndpoints> = {
   global: {
-    baseUrl: 'https://api3.qoder.sh/',
+    // The official client's primary prod-global inference domain; api3 is the
+    // fallback host it resolves to when api2 is unreachable.
+    baseUrl: 'https://api2.qoder.sh/',
     openApiUrl: 'https://openapi.qoder.sh',
     centerUrl: 'https://center.qoder.sh',
   },

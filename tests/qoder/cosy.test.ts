@@ -7,7 +7,7 @@ import { getQoderChatUrl } from '../../src/qoder/transport/endpoints.ts'
 import { getMachineId } from '../../src/qoder/transport/machine-id.ts'
 
 test('computeSigPath strips the /algo prefix', () => {
-  assert.equal(computeSigPath('https://api3.qoder.sh/algo/api/v2/service'), '/api/v2/service')
+  assert.equal(computeSigPath('https://api2.qoder.sh/algo/api/v2/service'), '/api/v2/service')
 })
 
 test('getMachineId accepts an isolated storage location', () => {

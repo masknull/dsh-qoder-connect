@@ -250,14 +250,25 @@ function isUnreachableFailure(error: unknown): boolean {
   return typeof status === 'number' && status >= 500
 }
 
+/**
+ * Verdict one PAT earns from a region's endpoints.
+ *
+ * - `'valid'` — the credential exchanged and the catalog answered with models.
+ * - `'no_models'` — the credential is accepted, but the account exposes no
+ *   enabled model (e.g. a free plan). It is saveable; the card must say the
+ *   account has nothing to run, not that the token failed.
+ * - `'invalid'` — the upstream refused the credential outright.
+ */
+export type QoderPatVerdict = 'valid' | 'no_models' | 'invalid'
+
 /** Whether a Personal Access Token works against one region's endpoints. */
 export async function validateApiKey(
   pat: string,
   region: QoderRegion,
   options: { timeoutMs?: number; fetch?: typeof fetch } = {},
-): Promise<boolean> {
+): Promise<QoderPatVerdict> {
   const trimmed = pat.trim()
-  if (trimmed === '') return false
+  if (trimmed === '') return 'invalid'
   const timeoutMs = options.timeoutMs ?? 15_000
   let lastTransportError: unknown
   // A refused token and an unreachable endpoint are different answers, and the card
@@ -274,9 +285,14 @@ export async function validateApiKey(
         metadataTimeoutMs: timeoutMs,
       })
       await transport.discoverModels(AbortSignal.timeout(timeoutMs))
-      return true
+      return 'valid'
     } catch (error) {
-      if (!isUnreachableFailure(error)) return false
+      // The credential cleared auth but the account lists no enabled model: that
+      // is a valid save, not a refusal. A free plan reads exactly like this.
+      if (error instanceof QoderLlmError && error.failure.code === 'EMPTY_RESPONSE') {
+        return 'no_models'
+      }
+      if (!isUnreachableFailure(error)) return 'invalid'
       lastTransportError = error
       if (attempt + 1 < validateAttempts) {
         await new Promise((resolve) => setTimeout(resolve, validateRetryDelayMs * (attempt + 1)))
