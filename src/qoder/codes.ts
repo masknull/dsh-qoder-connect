@@ -32,6 +32,7 @@ export const QODER_RESULT_CODES: readonly QoderResultCode[] = Object.freeze([
   ]),
   ...table('quota', [
     ['110', 'Daily usage limit reached'],
+    ['112', 'Model unavailable on this plan'],
     ['113', 'Usage quota exhausted'],
     ['114', 'Free-trial account limit reached'],
     ['115', 'Free-user quota reached'],
