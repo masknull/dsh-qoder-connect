@@ -1,5 +1,8 @@
 # DSH Qoder Connect
 
+> [!WARNING]
+> Qoder's recent giveaways are all rotten — it's queueing or rate-limiting every time, and I no longer use Qoder myself. Responses to issues and PRs may be slower; I may only check the repo or mail once every day or two.
+
 **English** | [简体中文](./README.md)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that brings your **Qoder subscription** models into DSH through a Personal Access Token (PAT). One plugin serves both Qoder product lines — each with its own settings card, provider id, credential file and saved catalog, never mixed:

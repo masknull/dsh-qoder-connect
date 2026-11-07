@@ -1,5 +1,8 @@
 # DSH Qoder Connect
 
+> [!WARNING]
+> Qoder 最近发的鸡蛋都是臭的——不是排队就是限流，作者本人已不再使用 Qoder。对 issue 和 PR 的处理速度可能放缓，可能一两天才看一次仓库或邮件。
+
 [English](./README.en.md) | **简体中文**
 
 把 **Qoder 订阅**的模型以个人访问令牌（PAT）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的社区插件。一个插件同时服务两条 Qoder 产品线，各自一张设置卡片、一个 provider、一套凭证与模型目录，互不混用：
