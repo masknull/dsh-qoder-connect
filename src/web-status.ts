@@ -140,6 +140,7 @@ function modelSnapshot(model: QoderModelInfo): QoderCatalogModelSnapshot {
     ...priceFactor === undefined ? {} : { priceFactor },
     supportsImages: model.supportsImages,
     ...model.source === undefined ? {} : { source: model.source },
+    ...model.scene === undefined ? {} : { scene: model.scene },
   }
 }
 

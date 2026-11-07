@@ -13,6 +13,13 @@ export interface QoderCatalogModel {
   /** True only when the provider declared `max_output_tokens`. */
   maxTokensDeclared?: boolean
   source?: string
+  /**
+   * Which catalog scene roster this model came from. The official CLI only
+   * requests `assistant`; anything else (`app`, and any future roster) is
+   * outside the officially supported set — shown so a user can tell a model
+   * the CLI does not natively offer from one it does.
+   */
+  scene?: string
   isReasoning?: boolean
   supportsEffort?: boolean
   reasoningEfforts?: Array<{
@@ -29,6 +36,7 @@ export interface QoderCatalogModel {
 interface QoderModelEntry {
   key?: unknown
   enable?: unknown
+  format?: unknown
   display_name?: unknown
   max_input_tokens?: unknown
   max_output_tokens?: unknown
@@ -135,11 +143,25 @@ export function normalizeQoderModels(
   payload: unknown,
   onConflict?: (conflict: CatalogConflict) => void,
 ): QoderCatalogModel[] {
-  if (typeof payload !== 'object' || payload === null || !Array.isArray((payload as { assistant?: unknown }).assistant)) return []
+  if (typeof payload !== 'object' || payload === null) return []
+  // The catalog answers in per-scene rosters, not one flat list. `assistant`
+  // is the CLI scene the official client requests; `app` adds the free tier's
+  // only model (lmodel / QoDuck), which the assistant array omits entirely.
+  // Merge both, keep `format:"openai"` so a future app-only model the CLI
+  // cannot speak is still dropped, and let `seen` dedupe — assistant stays
+  // first so its order wins.
+  const rosters: Array<{ scene: string; rows: QoderModelEntry[] }> = [
+    { scene: 'assistant', rows: (payload as { assistant?: unknown }).assistant as QoderModelEntry[] },
+    { scene: 'app', rows: (payload as { app?: unknown }).app as QoderModelEntry[] },
+  ].filter((r): r is { scene: string; rows: QoderModelEntry[] } => Array.isArray(r.rows))
+  if (rosters.length === 0) return []
   const models: QoderCatalogModel[] = []
   const seen = new Set<string>()
-  for (const raw of (payload as { assistant: QoderModelEntry[] }).assistant) {
+  for (const { scene, rows } of rosters) {
+    for (const raw of rows) {
     if (typeof raw !== 'object' || raw === null || raw.enable !== true) continue
+    // Only OpenAI-shaped models are usable through this transport.
+    if (typeof raw.format === 'string' && raw.format !== 'openai') continue
     const id = typeof raw.key === 'string' ? raw.key.trim() : ''
     if (!id || seen.has(id)) continue
     seen.add(id)
@@ -173,7 +195,9 @@ export function normalizeQoderModels(
       ...reasoning.defaultEffort === undefined ? {} : { defaultReasoningEffort: reasoning.defaultEffort },
       ...priceFactor === undefined ? {} : { priceFactor },
       ...contextOptions === undefined ? {} : { contextOptions },
+      scene,
     })
+    }
   }
   return models
 }

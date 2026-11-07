@@ -226,6 +226,8 @@ export interface QoderCatalogModelSnapshot {
   supportsImages?: boolean
   /** Upstream provenance marker (`system` / `user`), when reported. */
   source?: string
+  /** Catalog scene roster this model came from (`assistant`, `app`, …). */
+  scene?: string
 }
 
 /** The JSON document the plugin card renders. */

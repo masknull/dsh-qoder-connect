@@ -38,6 +38,11 @@ const payload = {
     },
     { key: 'reasoner', enable: true, display_name: 'Duplicate' },
   ],
+  app: [
+    { key: 'lmodel', enable: true, display_name: 'QoDuck', max_input_tokens: 180_000, price_factor: 0, is_vl: true, is_reasoning: true },
+    { key: 'reasoner', enable: true, display_name: 'App duplicate' },
+    { key: 'app-disabled', enable: false, display_name: 'App disabled' },
+  ],
 }
 
 test('assistant is required even when chat advertises enabled models', async () => {
@@ -48,6 +53,16 @@ test('assistant is required even when chat advertises enabled models', async () 
       userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
     }, { fetch: (async () => new Response(JSON.stringify(body))) as typeof fetch }), /no enabled models/u)
   }
+})
+
+test('app-only models merge in, dedupe against assistant, and skip disabled entries', () => {
+  // `app` adds lmodel (the free tier's only model); its duplicate of `reasoner`
+  // and the disabled entry are dropped by the same seen/enable rules.
+  const ids = normalizeQoderModels(payload).map(m => m.id)
+  assert.ok(ids.includes('lmodel'), 'app-only model missing')
+  assert.equal(ids.filter(id => id === 'reasoner').length, 1, 'assistant-first dedupe failed')
+  assert.ok(!ids.includes('app-disabled'), 'disabled app entry leaked in')
+  assert.ok(!ids.includes('chat-only'), 'chat roster leaked in')
 })
 
 test('context defaults and fallback capacities stay separate from maximum capacity', () => {
@@ -159,6 +174,18 @@ test('normalizeQoderModels keeps enabled unique models and their transport metad
       small: { tokenCount: 100_000, isDefault: true },
       large: { tokenCount: 400_000 },
     },
+    scene: 'assistant',
+  }, {
+    id: 'lmodel',
+    name: 'QoDuck',
+    contextWindow: 180_000,
+    maxContextWindow: 180_000,
+    source: 'system',
+    isReasoning: true,
+    supportsEffort: false,
+    supportsImages: true,
+    priceFactor: 0,
+    scene: 'app',
   }])
 })
 

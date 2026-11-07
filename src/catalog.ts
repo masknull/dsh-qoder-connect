@@ -27,6 +27,8 @@ export interface QoderModelInfo {
   billing: QoderModelBilling
   /** Upstream provenance marker (`system` / `user`), when reported. */
   source?: string
+  /** Catalog scene roster this model came from (`assistant`, `app`, …). */
+  scene?: string
 }
 
 /** What the upstream declares about one model's reasoning. */

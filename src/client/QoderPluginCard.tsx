@@ -846,6 +846,11 @@ function ModelSwitchTable({
                           </span>
                         ) : null
                       })()}
+                      {model.scene !== undefined && model.scene !== 'assistant' ? (
+                        <span title={t('modelNonCliSceneHint')} style={{ fontSize: 10, fontWeight: 400, marginLeft: 6, padding: '1px 5px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.2))', color: 'var(--dsw-alias-label-tertiary)' }}>
+                          {t('modelNonCliScene')}
+                        </span>
+                      ) : null}
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' }}>
                       {model.id}

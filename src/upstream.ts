@@ -1111,6 +1111,7 @@ export function modelInfoOf(model: QoderCatalogModel): QoderModelInfo {
     ...reasoning === undefined ? {} : { reasoning },
     billing,
     ...model.source === undefined ? {} : { source: model.source },
+    ...model.scene === undefined ? {} : { scene: model.scene },
   }
 }
 
