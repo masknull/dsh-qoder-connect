@@ -22,7 +22,7 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 // Keep the fallback in sync with package.json — it is the single source of truth.
 declare const __QODER_IDE_VERSION__: string | undefined
 export const qoderIdeVersion: string =
-  typeof __QODER_IDE_VERSION__ === 'string' ? __QODER_IDE_VERSION__ : '1.1.77'
+  typeof __QODER_IDE_VERSION__ === 'string' ? __QODER_IDE_VERSION__ : '1.1.84'
 export const qoderClientType = '5'
 /**
  * The desktop client identifier the campaign endpoints require; the generic
