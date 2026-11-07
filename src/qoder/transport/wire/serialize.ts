@@ -216,6 +216,9 @@ export async function buildQoderRequestBody(
       stage: identity.stage,
       id: identity.businessId,
       name: identity.businessName,
+      // The upstream's credits panel reads the billed model tier from this key,
+      // not from model_config.key; without it the run falls into the Auto pool.
+      model_key: modelKey,
       begin_at: identity.beginAt,
     },
   }
