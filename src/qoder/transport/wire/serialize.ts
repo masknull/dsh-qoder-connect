@@ -8,6 +8,7 @@ import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-t
 import type { QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
 import type { CosyCredentials } from './cosy.ts'
+import type { QoderTurnIdentity } from './turn-identity.ts'
 
 function stableHash(prefix: string, ...inputs: string[]): string {
   const hash = crypto.createHash('sha256')
@@ -102,6 +103,7 @@ export async function buildQoderRequestBody(
   model?: QoderCatalogModel,
   attachments?: QoderImageAttachments,
   region?: string,
+  turn?: QoderTurnIdentity,
 ): Promise<QoderWireRequest> {
   if (!userId) {
     throw new QoderLlmError('Qoder request identity is missing.', 'AUTH')
@@ -145,15 +147,24 @@ export async function buildQoderRequestBody(
   const sessionId = options.sessionId === undefined
     ? `${stablePart}-${crypto.randomUUID()}`
     : `${stablePart}-${String(options.sessionId)}`
-  // One attempt id and one queue key per call. The queue entry is keyed by
-  // request_set_id and must survive a replay, so it cannot derive from content:
-  // two identical asks would otherwise share (and overwrite) one entry.
+  // One id per attempt. The queue entry and the agent run are keyed by
+  // request_set_id, which must survive a replay and cover every step of one turn,
+  // so the caller supplies it from the turn it resolved.
   const requestId = crypto.randomUUID()
   const requestSetId = crypto.randomUUID()
+  const identity: QoderTurnIdentity = turn ?? {
+    // A hand-built caller with no turn: one call is one record, and the queue
+    // entry stays tied to the run the way the upstream expects.
+    requestSetId,
+    businessId: requestSetId,
+    beginAt: Date.now(),
+    stage: 'start',
+    businessName: lastUserText.substring(0, 30),
+  }
 
   return {
     request_id: requestId,
-    request_set_id: requestSetId,
+    request_set_id: identity.requestSetId,
     chat_record_id: requestId,
     session_id: sessionId,
     stream: true,
@@ -200,11 +211,12 @@ export async function buildQoderRequestBody(
       product: 'cli',
       version: '1.0.0',
       type: 'agent',
-      stage: 'start',
-      // The upstream ties a queue entry's business id to its request_set_id.
-      id: requestSetId,
-      name: lastUserText.substring(0, 30),
-      begin_at: Date.now(),
+      // `start` opens the run, `processing` continues it. The Credits panel
+      // aggregates on `id`, so every step of one turn reports the same one.
+      stage: identity.stage,
+      id: identity.businessId,
+      name: identity.businessName,
+      begin_at: identity.beginAt,
     },
   }
 }

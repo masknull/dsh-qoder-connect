@@ -15,6 +15,7 @@ import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
 import { buildAuthHeaders, qoderUserAgent, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBody } from './wire/encoding.ts'
 import { buildQoderRequestBody } from './wire/serialize.ts'
+import type { QoderTurnIdentity } from './wire/turn-identity.ts'
 import { parseQoderSse, type QoderSseNotice } from './wire/sse.ts'
 import type { QoderWireMessage } from './wire/wire-types.ts'
 
@@ -37,6 +38,12 @@ export interface QoderChatDependencies {
   onNotice?: (notice: QoderSseNotice) => void
   /** Whether to poll out a queue answer; false hands the failure to the host with its hint. */
   queueWait?: () => boolean
+  /**
+   * Agent run this request belongs to. Every step of one DSH turn reports the same
+   * one, so the upstream bills the whole turn as a single usage record; the
+   * adapter resolves it where the durable messages still carry their ids.
+   */
+  turn?: QoderTurnIdentity | undefined
   /**
    * Floor for one poll interval. Production keeps
    * {@link queuePollMinIntervalMs}; tests shorten it so a paced wait can be
@@ -307,7 +314,7 @@ export async function* streamQoderChat(
   messages: QoderWireMessage[],
   dependencies: QoderChatDependencies,
 ): AsyncGenerator<StreamChunk> {
-  const request = await buildQoderRequestBody(options, credentials.userID, messages, model, undefined, dependencies.region)
+  const request = await buildQoderRequestBody(options, credentials.userID, messages, model, undefined, dependencies.region, dependencies.turn)
   // The queue entry is keyed by request_set_id, which stays for the whole call;
   // a replay rotates only request_id/chat_record_id, exactly as the official
   // client does before re-sending.

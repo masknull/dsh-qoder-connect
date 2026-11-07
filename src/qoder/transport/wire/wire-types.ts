@@ -69,10 +69,14 @@ export interface QoderBusiness {
   product: string
   version: string
   type: string
+  /** `start` opens the agent run, `processing` continues it. */
   stage: string
   id: string
   name: string
   begin_at: number
+  /** Present on the closing report only. */
+  end_at?: number
+  model_key?: string
 }
 
 export interface QoderWireRequest {

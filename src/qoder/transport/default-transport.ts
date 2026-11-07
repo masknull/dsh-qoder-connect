@@ -23,6 +23,7 @@ import type { QoderTransport, QoderTransportOptions } from './index.ts'
 import { streamQoderChat } from './chat.ts'
 import type { CosyCredentials } from './wire/cosy.ts'
 import type { QoderWireMessage } from './wire/wire-types.ts'
+import type { QoderTurnIdentity } from './wire/turn-identity.ts'
 
 export const defaultStreamIdleTimeoutMs = 10 * 60 * 1000
 
@@ -110,10 +111,10 @@ export class DefaultQoderTransport implements QoderTransport {
     })
   }
 
-  stream(options: GenerateOptions, model?: QoderCatalogModel): AsyncIterable<StreamChunk> {
+  stream(options: GenerateOptions, model?: QoderCatalogModel, turn?: QoderTurnIdentity): AsyncIterable<StreamChunk> {
     const onQueueWait = this.createQueueWaitHandler?.(options) ?? this.onQueueWait
     const onNotice = this.createNoticeHandler?.(options) ?? this.onNotice
-    return this.generate(options, model, onQueueWait, onNotice)
+    return this.generate(options, model, onQueueWait, onNotice, turn)
   }
 
   /**
@@ -196,6 +197,7 @@ export class DefaultQoderTransport implements QoderTransport {
     onAccepted: () => void,
     onQueueWait: QoderTransportOptions['onQueueWait'],
     onNotice: QoderTransportOptions['onNotice'],
+    turn: QoderTurnIdentity | undefined,
   ): AsyncGenerator<StreamChunk> {
     const stream = streamQoderChat(options, model, credentials, messages, {
       fetch: this.fetchImpl,
@@ -208,6 +210,7 @@ export class DefaultQoderTransport implements QoderTransport {
       ...this.queueWaitBudgetMs === undefined ? {} : { queueWaitBudgetMs: this.queueWaitBudgetMs() },
       ...this.onDiag === undefined ? {} : { onDiag: this.onDiag },
       ...this.queueWait === undefined ? {} : { queueWait: this.queueWait },
+      ...turn === undefined ? {} : { turn },
     })
     const first = await stream.next()
     onAccepted()
@@ -220,6 +223,7 @@ export class DefaultQoderTransport implements QoderTransport {
     model: QoderCatalogModel | undefined,
     onQueueWait: QoderTransportOptions['onQueueWait'],
     onNotice: QoderTransportOptions['onNotice'],
+    turn: QoderTurnIdentity | undefined,
   ): AsyncGenerator<StreamChunk> {
     if (options.signal?.aborted) throw aborted('Request was aborted prior to generation.')
 
@@ -244,7 +248,7 @@ export class DefaultQoderTransport implements QoderTransport {
     try {
       for await (const chunk of this.streamChat(options, model, chatCredentials, messages, () => {
         this.onChatAccepted()
-      }, onQueueWait, onNotice)) {
+      }, onQueueWait, onNotice, turn)) {
         produced = true
         yield chunk
       }
@@ -280,7 +284,7 @@ export class DefaultQoderTransport implements QoderTransport {
             this.emitRefreshedNotice(requestNotice)
             requestNotice = undefined
           }
-        }, onQueueWait, onNotice)) {
+        }, onQueueWait, onNotice, turn)) {
           produced = true
           yield chunk
         }

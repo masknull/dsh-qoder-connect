@@ -19,7 +19,7 @@ import type { QoderCredentialStore } from './auth.ts'
 import type { QoderCatalog } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { KIND_STATUS, type QoderChatResult, type QoderUpstreamClient } from './upstream.ts'
-import { QODER_PURPOSE_HEADER, QODER_SESSION_HEADER, readQoderPurposeHeader, readQoderSessionHeader } from './request-session.ts'
+import { QODER_PURPOSE_HEADER, QODER_SESSION_HEADER, QODER_TURN_HEADER, readQoderPurposeHeader, readQoderSessionHeader, readQoderTurnHeader } from './request-session.ts'
 
 /** Minimal logger surface the plugin context already provides. */
 export interface ShimLogger {
@@ -433,6 +433,9 @@ export function createQoderShim(options: QoderShimOptions): QoderShim {
     })
     const sessionId = readQoderSessionHeader(req.headers[QODER_SESSION_HEADER])
     const purpose = readQoderPurposeHeader(req.headers[QODER_PURPOSE_HEADER])
+    // The agent run the adapter resolved from this request's durable messages;
+    // this hop only ever sees OpenAI-shaped JSON, which no longer carries them.
+    const turn = readQoderTurnHeader(req.headers[QODER_TURN_HEADER])
 
     /**
      * Commit the streaming head — once, and only if the answer turns slow.
@@ -461,7 +464,7 @@ export function createQoderShim(options: QoderShimOptions): QoderShim {
 
     let result: QoderChatResult
     try {
-      result = await client.chatStream(raw, controller.signal, sessionId, purpose)
+      result = await client.chatStream(raw, controller.signal, sessionId, purpose, turn)
     } finally {
       clearTimeout(grace)
     }

@@ -34,6 +34,7 @@ import type { QoderAccountInfo, QoderQuotaUsage } from './qoder/account.ts'
 import { qoderQueueSignal, QoderLlmError } from './qoder/errors.ts'
 import { qoderResultCode } from './qoder/codes.ts'
 import { createQoderTransport, type QoderCheckInResult, type QoderTransport } from './qoder/transport/index.ts'
+import type { QoderTurnIdentity } from './qoder/transport/wire/turn-identity.ts'
 import type { QoderModelBilling, QoderModelInfo, QoderModelReasoning } from './catalog.ts'
 
 /**
@@ -848,7 +849,13 @@ export class QoderUpstreamClient {
    * real HTTP status, not a 200 whose first frame is an error. Once streaming has
    * begun, failures degrade to the error-frame-then-`[DONE]` form.
    */
-  async chatStream(bodyJson: string, signal?: AbortSignal, sessionId?: string, purpose?: GenerateOptions['purpose']): Promise<QoderChatResult> {
+  async chatStream(
+    bodyJson: string,
+    signal?: AbortSignal,
+    sessionId?: string,
+    purpose?: GenerateOptions['purpose'],
+    turn?: QoderTurnIdentity,
+  ): Promise<QoderChatResult> {
     let options: GenerateOptions
     try {
       options = await toGenerateOptions(bodyJson, {
@@ -873,7 +880,7 @@ export class QoderUpstreamClient {
     const encoder = new ChunkEncoder(options.model)
     let iterator: AsyncIterator<StreamChunk>
     try {
-      iterator = this.transport.stream(options, this.catalogModelFor(options.model))[Symbol.asyncIterator]()
+      iterator = this.transport.stream(options, this.catalogModelFor(options.model), turn)[Symbol.asyncIterator]()
     } catch (error) {
       return failureResult(error)
     }
