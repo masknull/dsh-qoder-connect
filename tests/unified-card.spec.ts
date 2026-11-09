@@ -858,3 +858,60 @@ describe('Unified Qoder Plugin Card', () => {
     act(() => renderer?.unmount())
   })
 })
+
+describe('check-in log account column', () => {
+  it('renders which saved token each row belongs to', async () => {
+    // The column exists so a per-account sweep does not read as one account
+    // claiming several times: label, token tail, and a dash for history written
+    // before accounts were recorded.
+    const logs = [
+      { id: 'l-b', date: '2026-09-21', timestamp: 1700000200000, status: 'claimed', amount: 100, account: { id: 'bbbb2222aaaa', patTail: '2222' } },
+      { id: 'l-a', date: '2026-09-21', timestamp: 1700000100000, status: 'claimed', amount: 100, account: { id: 'aaaa1111bbbb', label: 'Work' } },
+      { id: 'l-0', date: '2026-09-20', timestamp: 1700000000000, status: 'claimed', amount: 100 },
+    ]
+    const request = vi.fn(async (url: string) => {
+      if (String(url) === QODER_STATUS_PATH) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: 'signed-in',
+            region: 'china',
+            pat: { source: 'card', savedAtMs: 1700000000000, patTail: '1111' },
+            authKey: 'cn-auth-key',
+            credits: { total: 30, accounts: [] },
+            models: [],
+            checkIn: { lastDate: '2026-09-21', lastAt: 1700000200000, status: 'claimed', amount: 100, logs },
+          }),
+        }
+      }
+      return { ok: true, status: 200, json: async () => ({ status: 'signed-out' }) }
+    })
+    vi.stubGlobal('fetch', request)
+    vi.stubGlobal('window', {
+      setInterval: () => 1,
+      clearInterval: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    } as unknown as Window & typeof globalThis)
+
+    let view: ReactTestRenderer | undefined
+    await act(async () => {
+      view = create(createElement(QoderPluginCard, { t: t as any, unified: true } as any))
+    })
+    const expandBtn = view!.root.findByProps({ 'aria-expanded': false })
+    await act(async () => { expandBtn.props.onClick() })
+    const checkInTab = view!.root.findAll(n => n.props.role === 'tab' && n.children.includes(en.tabCheckIn))[0]!
+    await act(async () => { checkInTab.props.onClick() })
+
+    const texts = view!.root.findAll(n => typeof n.type === 'string' && n.children.length > 0)
+      .flatMap(n => n.children.filter((c): c is string => typeof c === 'string'))
+    expect(texts).toContain(en.checkInLogAccount)
+    expect(texts).toContain('Work')
+    expect(texts).toContain('\u20262222')
+    // The account-less row shows a dash rather than borrowing another row's id.
+    expect(texts).toContain('-')
+    await act(async () => { view!.unmount() })
+  })
+})

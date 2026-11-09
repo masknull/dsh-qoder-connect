@@ -909,6 +909,8 @@ function CheckInLogTable({
     status: string
     amount?: number | undefined
     message?: string | undefined
+    /** Which saved token the row belongs to; absent on single-account history. */
+    account?: { id: string; label?: string | undefined; patTail?: string | undefined } | undefined
   }[] | undefined
   t: QoderPluginCardInjected['t']
   onCheckIn?: () => void
@@ -962,12 +964,23 @@ function CheckInLogTable({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.15))', paddingBottom: 6, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>
             <span style={{ flex: 2 }}>{t('checkInLogTime')}</span>
+            <span style={{ flex: 2 }}>{t('checkInLogAccount')}</span>
             <span style={{ flex: 3 }}>{t('checkInLogResult')}</span>
             <span style={{ flex: 1, textAlign: 'right' }}>{t('checkInLogAmount')}</span>
           </div>
           {logs.map(log => (
             <div key={log.id} style={{ display: 'flex', alignItems: 'center', padding: '6px 0', fontSize: 13, borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.08))' }}>
               <span style={{ flex: 2, color: 'var(--dsw-alias-label-secondary)' }}>{formatTime(log.timestamp)}</span>
+              {/*
+                Which token this row belongs to. Without it a per-account sweep
+                reads as several rows for one account, and "already claimed" looks
+                like the scheduler contradicting itself.
+              */}
+              <span style={{ flex: 2, color: 'var(--dsw-alias-label-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {log.account === undefined
+                  ? '-'
+                  : log.account.label ?? (log.account.patTail === undefined ? log.account.id.slice(0, 6) : `…${log.account.patTail}`)}
+              </span>
               <span style={{ flex: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{
                   width: 6,

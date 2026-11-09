@@ -29,7 +29,14 @@ export interface QoderTransport {
   stream(options: GenerateOptions, model?: QoderCatalogModel, turn?: QoderTurnIdentity): AsyncIterable<StreamChunk>
   discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]>
   readAccount(options?: { force?: boolean | undefined; signal?: AbortSignal | undefined }): Promise<QoderAccountInfo>
-  checkIn(signal?: AbortSignal): Promise<QoderCheckInResult>
+  /**
+   * Claim the daily benefit.
+   *
+   * @param signal - cancellation for this call.
+   * @param pat - claim for this token instead of the active one; the daily sweep
+   *   walks every saved credential, since each has its own window.
+   */
+  checkIn(signal?: AbortSignal, pat?: string): Promise<QoderCheckInResult>
 }
 
 export interface QoderTransportOptions {

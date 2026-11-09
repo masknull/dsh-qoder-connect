@@ -851,9 +851,12 @@ export class QoderUpstreamClient {
 
   /**
    * Run daily benefit check-in for this client's variant.
+   *
+   * @param pat - claim for this token rather than the active one; see
+   *   {@link QoderTransport.checkIn}.
    */
-  async checkIn(signal?: AbortSignal): Promise<QoderCheckInResult> {
-    return this.transport.checkIn(signal)
+  async checkIn(signal?: AbortSignal, pat?: string): Promise<QoderCheckInResult> {
+    return this.transport.checkIn(signal, pat)
   }
 
   /**

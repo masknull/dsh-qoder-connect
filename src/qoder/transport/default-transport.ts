@@ -165,9 +165,17 @@ export class DefaultQoderTransport implements QoderTransport {
     })
   }
 
-  async checkIn(signal?: AbortSignal): Promise<QoderCheckInResult> {
-    const pat = await this.requirePat(signal)
-    return this.checkInService.checkIn(pat, signal)
+  /**
+   * Claim the daily benefit.
+   *
+   * @param signal - cancellation for this call.
+   * @param pat - the token to claim for. The daily sweep names each saved PAT in
+   *   turn, because the benefit window belongs to the credential, not to the
+   *   machine. Absent, the active token is used, as before.
+   */
+  async checkIn(signal?: AbortSignal, pat?: string): Promise<QoderCheckInResult> {
+    const token = pat === undefined ? await this.requirePat(signal) : pat.trim()
+    return this.checkInService.checkIn(token, signal)
   }
 
   private async requirePat(signal?: AbortSignal): Promise<string> {
