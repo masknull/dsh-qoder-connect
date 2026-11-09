@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { QoderCredentialStore, qoderCredentialIdentity } from './auth.ts'
+import { QoderCredentialStore, patTail, qoderCredentialIdentity } from './auth.ts'
 import { createAuthKey, registerQoderAuthRoute } from './auth-route.ts'
 import { FALLBACK_QODER_MODELS, QoderCatalog } from './catalog.ts'
 import { qoderCatalogPath, QoderCatalogStore } from './catalog-store.ts'
@@ -491,6 +491,14 @@ interface VariantRuntime {
    * cast out of the transport, which would fail silently instead of compiling.
    */
   checkIn: (signal?: AbortSignal) => Promise<QoderCheckInResult>
+  /**
+   * Claim today's daily benefit for one named token.
+   *
+   * Each saved credential has its own daily window, so a variant holding several
+   * PATs can be claimed account by account without switching the active one — a
+   * switch would rewrite every other setting's owner.
+   */
+  checkInAs: (pat: string, signal?: AbortSignal) => Promise<QoderCheckInResult>
 }
 
 /** One catalog request plus the identity state it is allowed to update. */
@@ -715,6 +723,7 @@ function createVariantRuntime(
     queueBudgetMs: configuredQueueWaitMs,
     diag: writeQueueDiag,
     checkIn: (signal?: AbortSignal) => transport.checkIn(signal),
+    checkInAs: (pat: string, signal?: AbortSignal) => transport.checkIn(signal, pat),
   }
 }
 
@@ -1580,6 +1589,31 @@ export function apply(ctx: Context, config: Config): void {
       onClaimed: () => {
         void runtime.client.fetchCredits().catch(() => undefined)
       },
+      // Every saved token claims its own window: the daily benefit belongs to the
+      // credential, not to the machine, so one signed-in account tells you nothing
+      // about the others. Reading the list is host-side, like the claim itself.
+      accounts: async () => {
+        const entries = await runtime.store.entries()
+        return entries.map(entry => {
+          const tail = patTail(entry.pat)
+          return {
+            id: entry.id,
+            pat: entry.pat,
+            ...entry.label === undefined ? {} : { label: entry.label },
+            ...tail === undefined ? {} : { patTail: tail },
+          }
+        })
+      },
+      checkInAs: (account, signal?: AbortSignal) => runtime.checkInAs(account.pat, signal),
+      // Only the account the card is showing may rewrite the card: refreshing the
+      // quota after a background token claims would display another account's
+      // balance as if it were the active one's.
+      onAccountClaimed: account => {
+        void (async () => {
+          const active = await runtime.store.current()
+          if (active?.id === account.id) await runtime.client.fetchCredits().catch(() => undefined)
+        })().catch(() => undefined)
+      },
     })),
     isEnabled: variantId => {
       const cfg = current()
@@ -1836,23 +1870,44 @@ export function apply(ctx: Context, config: Config): void {
           checkInStore.clearLogs(runtime.variant.id)
         },
         checkIn: async () => {
-          const result = await runtime.checkIn()
-          if (result.status !== 'error') {
-            checkInStore.write(runtime.variant.id, {
-              lastDate: result.date,
-              lastAt: result.timestamp,
-              status: result.status,
+          // The card's button claims for every saved token, not just the active
+          // one: each credential holds its own daily window, so a single answer
+          // under-reports what the run won. `state` stays the headline status the
+          // card already reads; the rows spell out the rest.
+          const run = await checkInScheduler.checkInNow(runtime.variant.id)
+          if (run === undefined) {
+            const result = await runtime.checkIn()
+            if (result.status !== 'error') {
+              checkInStore.write(runtime.variant.id, {
+                lastDate: result.date,
+                lastAt: result.timestamp,
+                status: result.status,
+                ...result.amount === undefined ? {} : { amount: result.amount },
+                ...result.message === undefined ? {} : { message: result.message },
+              })
+              if (result.status === 'claimed') {
+                void runtime.client.fetchCredits().catch(() => undefined)
+              }
+            }
+            return {
+              state: result.status,
               ...result.amount === undefined ? {} : { amount: result.amount },
-              ...result.message === undefined ? {} : { message: result.message },
-            })
-            if (result.status === 'claimed') {
-              void runtime.client.fetchCredits().catch(() => undefined)
+              ...result.message === undefined ? {} : { reason: result.message },
+              accounts: [],
             }
           }
           return {
-            state: result.status,
-            ...result.amount === undefined ? {} : { amount: result.amount },
-            ...result.message === undefined ? {} : { reason: result.message },
+            state: run.status,
+            ...run.amount === undefined ? {} : { amount: run.amount },
+            ...run.message === undefined ? {} : { reason: run.message },
+            accounts: run.outcomes.map(outcome => ({
+              id: outcome.account.id,
+              status: outcome.status,
+              ...outcome.amount === undefined ? {} : { amount: outcome.amount },
+              ...outcome.message === undefined ? {} : { reason: outcome.message },
+              ...outcome.account.label === undefined ? {} : { label: outcome.account.label },
+              ...outcome.account.patTail === undefined ? {} : { patTail: outcome.account.patTail },
+            })),
           }
         },
         ...runtime.variant.id === CHINA_VARIANT.id

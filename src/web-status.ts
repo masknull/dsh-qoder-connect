@@ -70,6 +70,8 @@ export interface QoderStatusRouteOptions {
       amount?: number | undefined
       campaignKey?: string | undefined
       message?: string | undefined
+      /** Which saved token the row belongs to; absent on single-account history. */
+      account?: { id: string; label?: string | undefined; patTail?: string | undefined } | undefined
     }[] | undefined
   } | undefined
   /**

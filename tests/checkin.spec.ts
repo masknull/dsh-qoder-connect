@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QoderCheckInService, type QoderCheckInResult } from '../src/qoder/transport/checkin.ts'
 import type { QoderAuthService } from '../src/qoder/transport/auth.ts'
@@ -5,9 +8,11 @@ import {
   CheckInScheduler,
   DEFAULT_CHECK_IN_MINUTE,
   EARLIEST_CHECK_IN_MINUTE,
+  JsonFileCheckInStore,
   isPastCheckInTime,
   msUntilNextCheckIn,
   normalizeCheckInMinute,
+  type CheckInAccount,
   type CheckInStatusStore,
   type CheckInRecord,
 } from '../src/checkin-scheduler.ts'
@@ -893,5 +898,348 @@ describe('check-in across the 10:00 window boundary', () => {
     // ...which is only possible because the pre-window attempt left the day
     // unsettled instead of recording the previous window's CLAIMED against it.
     expect(early.status).toBe('before-window')
+  })
+})
+
+describe('CheckInScheduler across every saved account', () => {
+  const DAY = '2026-09-22'
+  const AFTER_10 = new Date('2026-09-22T04:00:00.000Z').getTime() // 12:00 UTC+8
+
+  /** An in-memory store shaped exactly like the JSON one. */
+  function memoryStore(seed?: Record<string, CheckInRecord>) {
+    const records: Record<string, CheckInRecord> = { ...seed }
+    const store: CheckInStatusStore = {
+      read: id => records[id],
+      write: (id, record) => {
+        const existingLogs = records[id]?.logs ?? []
+        const newLog = {
+          id: `${record.lastDate}-${record.lastAt}${record.account === undefined ? '' : `-${record.account.id}`}`,
+          date: record.lastDate,
+          timestamp: record.lastAt,
+          status: record.status,
+          ...record.amount === undefined ? {} : { amount: record.amount },
+          ...record.message === undefined ? {} : { message: record.message },
+          ...record.account === undefined ? {} : { account: record.account },
+        }
+        records[id] = {
+          ...record,
+          logs: [newLog, ...existingLogs.filter(l => l.id !== newLog.id)].slice(0, 30),
+        }
+      },
+      clearLogs: id => { if (records[id]) records[id].logs = [] },
+    }
+    return { store, records }
+  }
+
+  function account(id: string): CheckInAccount {
+    return { id, pat: `pt-${id}`, patTail: id.slice(-4) }
+  }
+
+  it('claims once per saved token instead of stopping at the active one', async () => {
+    const { store, records } = memoryStore()
+    const seen: string[] = []
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('the sweep must not use the active-only path') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111'), account('bbbb2222'), account('cccc3333')],
+        checkInAs: async a => {
+          seen.push(a.id)
+          return { variantId: 'qoder', date: DAY, timestamp: 1, status: 'claimed' as const, amount: 100 }
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    await scheduler.sweepAll(false, 'qoder')
+    scheduler.dispose()
+
+    expect(seen).toEqual(['aaaa1111', 'bbbb2222', 'cccc3333'])
+    // One row per token: the log would otherwise read as a single account's day.
+    expect(records.qoder?.logs).toHaveLength(3)
+    expect(Object.keys(records.qoder?.accounts ?? {})).toEqual(['aaaa1111', 'bbbb2222', 'cccc3333'])
+  })
+
+  it('does not re-claim a token that already claimed today, but claims its siblings', async () => {
+    const { store, records } = memoryStore({
+      qoder: {
+        lastDate: DAY,
+        lastAt: 1,
+        status: 'claimed',
+        amount: 100,
+        accounts: { aaaa1111: { date: DAY, status: 'claimed', amount: 100 } },
+      },
+    })
+    const seen: string[] = []
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111'), account('bbbb2222')],
+        checkInAs: async a => {
+          seen.push(a.id)
+          return { variantId: 'qoder', date: DAY, timestamp: 2, status: 'claimed' as const, amount: 100 }
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    await scheduler.sweepAll(false, 'qoder')
+    scheduler.dispose()
+
+    expect(seen).toEqual(['bbbb2222'])
+    expect(records.qoder?.accounts?.bbbb2222?.status).toBe('claimed')
+  })
+
+  it('one unreachable token does not burn the day for the others', async () => {
+    const { store, records } = memoryStore()
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111'), account('bbbb2222')],
+        checkInAs: async a => {
+          if (a.id === 'aaaa1111') throw new Error('upstream unreachable')
+          return { variantId: 'qoder', date: DAY, timestamp: 2, status: 'claimed' as const, amount: 100 }
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    await scheduler.sweepAll(false, 'qoder')
+    scheduler.dispose()
+
+    // The healthy token still got its benefit, and the broken one is left retryable.
+    expect(records.qoder?.accounts?.bbbb2222?.status).toBe('claimed')
+    expect(records.qoder?.accounts?.aaaa1111).toBeUndefined()
+  })
+
+  it('an error result is not a settled day for that token', async () => {
+    const { store, records } = memoryStore()
+    let calls = 0
+    const build = () => new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111')],
+        checkInAs: async () => {
+          calls += 1
+          return calls === 1
+            ? { variantId: 'qoder', date: DAY, timestamp: calls, status: 'error' as const, message: 'boom' }
+            : { variantId: 'qoder', date: DAY, timestamp: calls, status: 'claimed' as const, amount: 100 }
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    const first = build()
+    await first.sweepAll(false, 'qoder')
+    first.dispose()
+    expect(records.qoder?.accounts?.aaaa1111).toBeUndefined()
+
+    const second = build()
+    await second.sweepAll(false, 'qoder')
+    second.dispose()
+    expect(records.qoder?.accounts?.aaaa1111?.status).toBe('claimed')
+  })
+
+  it('honours a legacy single-account record instead of re-posting a settled day', async () => {
+    // The file every version before per-account claiming writes: a header row,
+    // no `accounts` map, and exactly one saved token.
+    const { store } = memoryStore({
+      qoder: { lastDate: DAY, lastAt: 1, status: 'claimed', amount: 100 },
+    })
+    const seen: string[] = []
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111')],
+        checkInAs: async a => {
+          seen.push(a.id)
+          return { variantId: 'qoder', date: DAY, timestamp: 2, status: 'claimed' as const }
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    await scheduler.sweepAll(false, 'qoder')
+    scheduler.dispose()
+    expect(seen).toEqual([])
+  })
+
+  it('never runs two claims upstream at once when a sweep and a manual run overlap', async () => {
+    const { store } = memoryStore()
+    const pending: ((r: QoderCheckInResult) => void)[] = []
+    let inFlight = 0
+    let peak = 0
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111')],
+        checkInAs: () => {
+          inFlight += 1
+          peak = Math.max(peak, inFlight)
+          return new Promise<QoderCheckInResult>(resolve => {
+            pending.push(r => { inFlight -= 1; resolve(r) })
+          })
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    const sweeping = scheduler.sweepAll(false, 'qoder')
+    // Let the sweep reach its claim before the manual run is asked for.
+    await vi.waitFor(() => { expect(pending).toHaveLength(1) })
+    const manual = scheduler.checkInNow('qoder')
+    // The manual run waits on the sweep in flight; it must not open a second one.
+    await Promise.resolve()
+    expect(pending).toHaveLength(1)
+
+    pending[0]!({ variantId: 'qoder', date: DAY, timestamp: 1, status: 'claimed' as const, amount: 100 })
+    await sweeping
+    // ...and only then does the manual run make its own attempt.
+    await vi.waitFor(() => { expect(pending).toHaveLength(2) })
+    pending[1]!({ variantId: 'qoder', date: DAY, timestamp: 2, status: 'already-claimed' as const, amount: 100 })
+    const run = await manual
+    scheduler.dispose()
+
+    // Serialised, never concurrent: that is what keeps a manual click from racing
+    // the scheduled sweep toward a double claim.
+    expect(peak).toBe(1)
+    expect(run?.status).toBe('already-claimed')
+  })
+
+  it('reports the claim per account through the manual path', async () => {
+    const { store, records } = memoryStore()
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111'), account('bbbb2222')],
+        checkInAs: async a => a.id === 'aaaa1111'
+          ? { variantId: 'qoder', date: DAY, timestamp: 1, status: 'claimed' as const, amount: 100 }
+          : { variantId: 'qoder', date: DAY, timestamp: 2, status: 'already-claimed' as const, amount: 100 },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    const run = await scheduler.checkInNow('qoder')
+    scheduler.dispose()
+
+    expect(run?.status).toBe('claimed')
+    // 100 won, not 200: one account claimed, the other was already done.
+    expect(run?.amount).toBe(100)
+    expect(run?.outcomes.map(o => [o.account.id, o.status])).toEqual([
+      ['aaaa1111', 'claimed'],
+      ['bbbb2222', 'already-claimed'],
+    ])
+    expect(records.qoder?.logs).toHaveLength(2)
+  })
+
+  it('falls back to the active credential when no accounts are saved', async () => {
+    const { store } = memoryStore()
+    const checkIn = vi.fn(async () => ({
+      variantId: 'qoder', date: DAY, timestamp: 1, status: 'claimed' as const, amount: 100,
+    }))
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn,
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [],
+        checkInAs: async () => { throw new Error('must not be used') },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    await scheduler.sweepAll(false, 'qoder')
+    scheduler.dispose()
+    expect(checkIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the active-only path when the credential list cannot be read', async () => {
+    const { store } = memoryStore()
+    const checkIn = vi.fn(async () => ({
+      variantId: 'qoder', date: DAY, timestamp: 1, status: 'claimed' as const, amount: 100,
+    }))
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn,
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => { throw new Error('credential file unreadable') },
+        checkInAs: async () => { throw new Error('must not be used') },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    await scheduler.sweepAll(false, 'qoder')
+    scheduler.dispose()
+    expect(checkIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists per-account flags and rows through the JSON store', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'qoder-checkin-'))
+    try {
+      const file = join(dir, 'checkin-status.json')
+      const store = new JsonFileCheckInStore(file)
+      const scheduler = new CheckInScheduler({
+        targets: [{
+          variantId: 'qoder',
+          checkIn: async () => { throw new Error('unused') },
+          minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+          accounts: async () => [account('aaaa1111'), account('bbbb2222')],
+          checkInAs: async a => ({
+            variantId: 'qoder', date: DAY, timestamp: a.id === 'aaaa1111' ? 1 : 2,
+            status: 'claimed' as const, amount: 100,
+          }),
+        }],
+        isEnabled: () => true,
+        store,
+        now: () => AFTER_10,
+      })
+
+      await scheduler.sweepAll(false, 'qoder')
+      scheduler.dispose()
+
+      const raw = JSON.parse(await readFile(file, 'utf8')) as Record<string, CheckInRecord>
+      const record = raw.qoder!
+      // Both tokens recorded, both rows kept: a shared date+second key would have
+      // let the second overwrite the first.
+      expect(Object.keys(record.accounts ?? {})).toHaveLength(2)
+      expect(record.logs).toHaveLength(2)
+      expect(record.logs?.map(l => l.account?.id)).toEqual(['bbbb2222', 'aaaa1111'])
+      // The token itself never reaches the status file.
+      expect(JSON.stringify(raw)).not.toContain('pt-aaaa1111')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -1458,3 +1458,85 @@ test('QoderTransport never replays a stream that already produced chunks before 
 
 
 
+
+test('checkIn claims for a named token instead of the active one', async () => {
+  // The daily sweep walks every saved PAT. The transport must honour the token it
+  // is given, or every account would silently claim through the active one and
+  // report the same single result four times.
+  const claimed: string[] = []
+  let active = 0
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => { active += 1; return Promise.resolve('pt-active') },
+    resolveMachineId: () => 'machine-test',
+    fetch: (async (input: URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) {
+        // The exchange body names the PAT being exchanged; that is how this test
+        // tells which account the transport acted for.
+        const body = String(init?.body ?? '')
+        claimed.push(body.includes('pt-other') ? 'pt-other' : 'pt-active')
+        return new Response(JSON.stringify({ token: 'jt-shared' }))
+      }
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-1' }))
+      if (url.includes('/me/campaigns/')) {
+        return new Response(JSON.stringify({ status: 'CLAIMED', benefit: { amount: 100 } }))
+      }
+      if (url.includes('/me/campaigns')) {
+        return new Response(JSON.stringify({
+          claimable: true,
+          campaigns: [{
+            campaignId: 'camp-1',
+            actionType: 'CLAIM_BENEFIT',
+            claimStatus: 'CLAIMABLE',
+            startAt: Math.floor(Date.now() / 1000) - 60,
+            endAt: Math.floor(Date.now() / 1000) + 3600,
+            benefit: { amount: 100, kind: 'CREDITS' },
+          }],
+        }))
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  const result = await transport.checkIn(undefined, 'pt-other')
+  assert.equal(result.status, 'claimed')
+  assert.deepEqual(claimed, ['pt-other'])
+  // The active-credential resolver was never consulted for a named claim.
+  assert.equal(active, 0)
+})
+
+test('checkIn falls back to the active token when none is named', async () => {
+  let resolveCalls = 0
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => { resolveCalls += 1; return Promise.resolve('pt-active') },
+    resolveMachineId: () => 'machine-test',
+    fetch: (async (input: URL | Request): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-shared' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-1' }))
+      if (url.includes('/me/campaigns/')) {
+        return new Response(JSON.stringify({ status: 'CLAIMED', benefit: { amount: 100 } }))
+      }
+      if (url.includes('/me/campaigns')) {
+        return new Response(JSON.stringify({
+          claimable: true,
+          campaigns: [{
+            campaignId: 'camp-1',
+            actionType: 'CLAIM_BENEFIT',
+            claimStatus: 'CLAIMABLE',
+            startAt: Math.floor(Date.now() / 1000) - 60,
+            endAt: Math.floor(Date.now() / 1000) + 3600,
+            benefit: { amount: 100, kind: 'CREDITS' },
+          }],
+        }))
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  const result = await transport.checkIn()
+  assert.equal(result.status, 'claimed')
+  assert.equal(resolveCalls, 1)
+})
