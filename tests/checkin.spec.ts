@@ -1159,6 +1159,57 @@ describe('CheckInScheduler across every saved account', () => {
     expect(records.qoder?.logs).toHaveLength(2)
   })
 
+  it('surfaces why a fully failed manual run failed', async () => {
+    const { store } = memoryStore()
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111'), account('bbbb2222')],
+        checkInAs: async a => { throw new Error(`upstream unreachable for ${a.id}`) },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    const run = await scheduler.checkInNow('qoder')
+    scheduler.dispose()
+
+    // The card reads its error notice off this message; without it a failed run
+    // looks like nothing happened.
+    expect(run?.status).toBe('error')
+    expect(run?.message).toContain('upstream unreachable for aaaa1111')
+    expect(run?.message).toContain('upstream unreachable for bbbb2222')
+  })
+
+  it('carries the failure reason alongside a partially successful run', async () => {
+    const { store } = memoryStore()
+    const scheduler = new CheckInScheduler({
+      targets: [{
+        variantId: 'qoder',
+        checkIn: async () => { throw new Error('unused') },
+        minuteOfDay: () => DEFAULT_CHECK_IN_MINUTE,
+        accounts: async () => [account('aaaa1111'), account('bbbb2222')],
+        checkInAs: async a => {
+          if (a.id === 'aaaa1111') throw new Error('upstream unreachable')
+          return { variantId: 'qoder', date: DAY, timestamp: 2, status: 'claimed' as const, amount: 100 }
+        },
+      }],
+      isEnabled: () => true,
+      store,
+      now: () => AFTER_10,
+    })
+
+    const run = await scheduler.checkInNow('qoder')
+    scheduler.dispose()
+
+    expect(run?.status).toBe('claimed')
+    expect(run?.amount).toBe(100)
+    expect(run?.message).toBe('upstream unreachable')
+  })
+
   it('falls back to the active credential when no accounts are saved', async () => {
     const { store } = memoryStore()
     const checkIn = vi.fn(async () => ({

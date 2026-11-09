@@ -479,6 +479,11 @@ export class CheckInScheduler {
       }
     }
     const first = outcomes[0]
+    // The card reads one reason off the aggregate: a run where accounts failed
+    // must not sit silent, so the per-account errors are joined here.
+    const failureReasons = [...new Set(outcomes
+      .filter(outcome => outcome.status === 'error')
+      .map(outcome => outcome.message ?? 'unknown error'))]
     return {
       // One account answers exactly as the single-account card always did; only a
       // multi-account run needs an aggregate, which reports what the run won.
@@ -486,6 +491,7 @@ export class CheckInScheduler {
       ...(claimed > 0
         ? { amount: claimed }
         : outcomes.length === 1 ? { ...first?.amount === undefined ? {} : { amount: first.amount } } : {}),
+      ...failureReasons.length === 0 ? {} : { message: failureReasons.join('; ') },
       outcomes,
     }
   }
